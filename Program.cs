@@ -910,7 +910,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         }
 
         // Read the tail of the log
-        var tailSize = Math.Min(80000, logFile.Length);
+        var tailSize = Math.Min(150000, logFile.Length);
         string tail;
         using (var fs = new FileStream(logFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
         {
@@ -926,39 +926,63 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         {
             var trimmed = lines[i].Trim();
 
-            // Tool call telemetry — look for tool_name on the next few lines
-            if (trimmed.Contains("[Telemetry] cli.tool_call:"))
+            // Function calls with arguments — this is what the agent is DOING
+            if (trimmed.Contains("\"name\":") && !trimmed.Contains("\"function\"") && !trimmed.Contains("description"))
             {
-                var timeMatch = Regex.Match(trimmed, @"(\d{2}:\d{2}:\d{2})");
-                var time = timeMatch.Success ? timeMatch.Value : "??:??:??";
-                // Scan next 5 lines for "tool_name"
-                for (int j = i + 1; j < Math.Min(i + 6, lines.Length); j++)
+                var fnMatch = Regex.Match(trimmed, "\"name\":\\s*\"([^\"]+)\"");
+                if (!fnMatch.Success) continue;
+                var toolName = fnMatch.Groups[1].Value;
+                if (toolName == "report_intent" || toolName == "stop_powershell" || toolName.Length > 50) continue;
+                
+                // Look at next line for arguments with description/command/intent
+                var detail = "";
+                if (i + 1 < lines.Length && lines[i + 1].Contains("\"arguments\":"))
                 {
-                    var nameMatch = Regex.Match(lines[j], "\"tool_name\":\\s*\"([^\"]+)\"");
-                    if (nameMatch.Success)
-                    {
-                        var toolName = nameMatch.Groups[1].Value;
-                        if (toolName == "report_intent") break; // skip noise
-                        var icon = toolName switch
-                        {
-                            "powershell" => "⚡",
-                            "edit" => "✏️",
-                            "create" => "📄",
-                            "view" => "👁️",
-                            "grep" => "🔍",
-                            "glob" => "🔍",
-                            "read_agent" => "🤖",
-                            "read_powershell" => "📟",
-                            "write_powershell" => "⌨️",
-                            _ when toolName.StartsWith("github-mcp") => "🔗",
-                            _ when toolName.StartsWith("azure-devops") => "🔗",
-                            _ when toolName.Contains("workiq") => "📧",
-                            _ => "🔧"
-                        };
-                        feedEntries.Add((time, icon, $"{toolName}"));
-                        break;
+                    var argsLine = lines[i + 1];
+                    var descM = Regex.Match(argsLine, "\\\\\"description\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
+                    if (descM.Success) detail = descM.Groups[1].Value;
+                    else {
+                        var cmdM = Regex.Match(argsLine, "\\\\\"command\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
+                        if (cmdM.Success) detail = cmdM.Groups[1].Value.Replace("\\n", " ");
                     }
+                    var intentM = Regex.Match(argsLine, "\\\\\"intent\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
+                    if (intentM.Success) detail = intentM.Groups[1].Value;
+                    var questM = Regex.Match(argsLine, "\\\\\"question\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
+                    if (questM.Success) detail = "Q: " + questM.Groups[1].Value;
+                    var promptM = Regex.Match(argsLine, "\\\\\"prompt\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
+                    if (promptM.Success && string.IsNullOrEmpty(detail)) detail = promptM.Groups[1].Value;
                 }
+
+                // Get timestamp from a nearby log line (search backwards for a timestamp)
+                var time = "??:??:??";
+                for (int k = i; k >= Math.Max(0, i - 20); k--)
+                {
+                    var tm = Regex.Match(lines[k], @"(\d{2}:\d{2}:\d{2})");
+                    if (tm.Success) { time = tm.Value; break; }
+                }
+
+                var icon = toolName switch
+                {
+                    "powershell" => "⚡",
+                    "edit" => "✏️",
+                    "create" => "📄",
+                    "view" => "👁️",
+                    "grep" => "🔍",
+                    "glob" => "🔍",
+                    "task" => "🤖",
+                    "read_agent" => "🤖",
+                    "read_powershell" => "📟",
+                    "write_powershell" => "⌨️",
+                    "ask_user" => "❓",
+                    _ when toolName.StartsWith("github-mcp") => "🔗",
+                    _ when toolName.StartsWith("azure-devops") => "🔗",
+                    _ when toolName.Contains("workiq") => "📧",
+                    _ when toolName.Contains("playwright") => "🌐",
+                    _ => "🔧"
+                };
+                var displayText = string.IsNullOrEmpty(detail) ? toolName : $"{toolName} → {detail}";
+                if (displayText.Length > 95) displayText = displayText.Substring(0, 92) + "...";
+                feedEntries.Add((time, icon, displayText));
             }
             // Agent completion system notifications
             else if (trimmed.Contains("System notification: Agent"))
