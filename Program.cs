@@ -53,6 +53,10 @@ if (runOnce)
     DisplayRecentlyMergedPRs(teamRoot);
     var activities = LoadActivities(teamRoot);
     DisplayOrchestrationLog(activities);
+    
+    // Live Agent Feed
+    var liveAgentFeed = BuildLiveAgentFeedSection(userProfile);
+    AnsiConsole.Write(liveAgentFeed);
 }
 else
 {
@@ -114,6 +118,9 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
     };
     sections.Add(header);
     sections.Add(Text.Empty);
+
+    // Live Agent Activity (tails agency/copilot logs) — top priority visibility
+    sections.Add(BuildLiveAgentFeedSection(userProfile));
 
     // Ralph Watch Heartbeat
     sections.Add(BuildRalphHeartbeatSection(userProfile));
@@ -856,6 +863,178 @@ static IRenderable BuildDetailedOrchestrationSection(List<AgentActivity> activit
         items.Add(Text.Empty);
     }
 
+    return new Rows(items);
+}
+
+// ─── Live Agent Feed Section ────────────────────────────────────────────────
+
+static IRenderable BuildLiveAgentFeedSection(string userProfile)
+{
+    var items = new List<IRenderable>();
+    var section = new Rule("[green bold]Live Agent Feed[/] [dim](~/.agency/logs)[/]") { Justification = Justify.Left };
+    items.Add(section);
+
+    try
+    {
+        var agencyLogDir = Path.Combine(userProfile, ".agency", "logs");
+        if (!Directory.Exists(agencyLogDir))
+        {
+            items.Add(new Markup("[dim]  No agency logs directory found[/]"));
+            items.Add(Text.Empty);
+            return new Rows(items);
+        }
+
+        // Find the latest session directory
+        var latestSession = new DirectoryInfo(agencyLogDir)
+            .GetDirectories()
+            .OrderByDescending(d => d.LastWriteTime)
+            .FirstOrDefault();
+
+        if (latestSession == null)
+        {
+            items.Add(new Markup("[dim]  No agency sessions found[/]"));
+            items.Add(Text.Empty);
+            return new Rows(items);
+        }
+
+        // Find the most recently written log file
+        var logFile = latestSession.GetFiles("*.log")
+            .OrderByDescending(f => f.LastWriteTime)
+            .FirstOrDefault();
+
+        if (logFile == null || logFile.Length == 0)
+        {
+            items.Add(new Markup("[dim]  No log files in current session[/]"));
+            items.Add(Text.Empty);
+            return new Rows(items);
+        }
+
+        // Read the tail of the log
+        var tailSize = Math.Min(80000, logFile.Length);
+        string tail;
+        using (var fs = new FileStream(logFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            fs.Seek(-tailSize, SeekOrigin.End);
+            using var reader = new StreamReader(fs);
+            tail = reader.ReadToEnd();
+        }
+
+        var lines = tail.Split('\n');
+        var feedEntries = new List<(string time, string icon, string text)>();
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var trimmed = lines[i].Trim();
+
+            // Tool call telemetry — look for tool_name on the next few lines
+            if (trimmed.Contains("[Telemetry] cli.tool_call:"))
+            {
+                var timeMatch = Regex.Match(trimmed, @"(\d{2}:\d{2}:\d{2})");
+                var time = timeMatch.Success ? timeMatch.Value : "??:??:??";
+                // Scan next 5 lines for "tool_name"
+                for (int j = i + 1; j < Math.Min(i + 6, lines.Length); j++)
+                {
+                    var nameMatch = Regex.Match(lines[j], "\"tool_name\":\\s*\"([^\"]+)\"");
+                    if (nameMatch.Success)
+                    {
+                        var toolName = nameMatch.Groups[1].Value;
+                        if (toolName == "report_intent") break; // skip noise
+                        var icon = toolName switch
+                        {
+                            "powershell" => "⚡",
+                            "edit" => "✏️",
+                            "create" => "📄",
+                            "view" => "👁️",
+                            "grep" => "🔍",
+                            "glob" => "🔍",
+                            "read_agent" => "🤖",
+                            "read_powershell" => "📟",
+                            "write_powershell" => "⌨️",
+                            _ when toolName.StartsWith("github-mcp") => "🔗",
+                            _ when toolName.StartsWith("azure-devops") => "🔗",
+                            _ when toolName.Contains("workiq") => "📧",
+                            _ => "🔧"
+                        };
+                        feedEntries.Add((time, icon, $"{toolName}"));
+                        break;
+                    }
+                }
+            }
+            // Agent completion system notifications
+            else if (trimmed.Contains("System notification: Agent"))
+            {
+                var timeMatch = Regex.Match(trimmed, @"(\d{2}:\d{2}:\d{2})");
+                var time = timeMatch.Success ? timeMatch.Value : "??:??:??";
+                var agentMatch = Regex.Match(trimmed, "Agent \"([^\"]+)\" \\(([^)]+)\\)");
+                if (agentMatch.Success)
+                {
+                    var agentId = agentMatch.Groups[1].Value;
+                    var agentType = agentMatch.Groups[2].Value;
+                    var completed = trimmed.Contains("completed successfully");
+                    var icon = completed ? "✅" : "❌";
+                    feedEntries.Add((time, icon, $"Agent {agentId} ({agentType}) {(completed ? "completed" : "finished")}"));
+                }
+            }
+            // Shell command completion notifications
+            else if (trimmed.Contains("System notification: Shell command"))
+            {
+                var timeMatch = Regex.Match(trimmed, @"(\d{2}:\d{2}:\d{2})");
+                var time = timeMatch.Success ? timeMatch.Value : "??:??:??";
+                var cmdMatch = Regex.Match(trimmed, "Shell command \"([^\"]+)\"");
+                var desc = cmdMatch.Success ? cmdMatch.Groups[1].Value : "shell command";
+                if (desc.Length > 60) desc = desc.Substring(0, 57) + "...";
+                feedEntries.Add((time, "📟", $"Shell: {desc}"));
+            }
+            // Model calls (AI reasoning turns)
+            else if (trimmed.Contains("[Telemetry] cli.model_call:"))
+            {
+                var timeMatch = Regex.Match(trimmed, @"(\d{2}:\d{2}:\d{2})");
+                var time = timeMatch.Success ? timeMatch.Value : "??:??:??";
+                feedEntries.Add((time, "🧠", "AI model reasoning turn"));
+            }
+        }
+
+        // Show last 12 entries
+        var recent = feedEntries.TakeLast(12).ToList();
+
+        if (recent.Count == 0)
+        {
+            items.Add(new Markup("[dim]  No recent agent activity detected in logs[/]"));
+        }
+        else
+        {
+            // Add session info header
+            var sessionAge = DateTime.Now - logFile.LastWriteTime;
+            var sessionAgeStr = sessionAge.TotalMinutes < 1 ? "just now" :
+                                sessionAge.TotalMinutes < 60 ? $"{(int)sessionAge.TotalMinutes}m ago" :
+                                $"{(int)sessionAge.TotalHours}h ago";
+            items.Add(new Markup($"  [dim]Session:[/] {Markup.Escape(latestSession.Name)}  [dim]Last write:[/] {sessionAgeStr}  [dim]Entries:[/] {feedEntries.Count} total"));
+            items.Add(Text.Empty);
+
+            var table = new Table()
+                .BorderColor(Color.Grey)
+                .Border(TableBorder.Simple)
+                .AddColumn(new TableColumn("Time").Width(10))
+                .AddColumn(new TableColumn("").Width(3))
+                .AddColumn(new TableColumn("Activity").Width(80));
+
+            foreach (var entry in recent)
+            {
+                table.AddRow(
+                    $"[dim]{Markup.Escape(entry.time)}[/]",
+                    entry.icon,
+                    Markup.Escape(entry.text));
+            }
+
+            items.Add(table);
+        }
+    }
+    catch (Exception ex)
+    {
+        items.Add(new Markup($"[red]  Error reading agency logs: {Markup.Escape(ex.Message)}[/]"));
+    }
+
+    items.Add(Text.Empty);
     return new Rows(items);
 }
 
