@@ -1,0 +1,56 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+
+## Visual Studio
+.vs/
+*.rsuser
+*.sln.docstates
+launchSettings.json
+
+## Rider
+.idea/
+*.sln.iml
+
+## User-specific
+*.suo
+*.user
+*.userprefs
+
+## Publish output
+publish/
+
+## OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## Squad runtime files (generated at runtime, not committed)
+.ralph-watch.lock
