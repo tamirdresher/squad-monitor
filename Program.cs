@@ -481,6 +481,205 @@ static IRenderable BuildRalphLogSection(string userProfile)
     return new Rows(items);
 }
 
+static IRenderable BuildTokenStatsSection(string userProfile)
+{
+    var items = new List<IRenderable>();
+    var section = new Rule("[magenta bold]Token Usage & Cost Stats[/] [dim](~/.copilot/logs)[/]") { Justification = Justify.Left };
+    items.Add(section);
+
+    try
+    {
+        var copilotLogDir = Path.Combine(userProfile, ".copilot", "logs");
+        if (!Directory.Exists(copilotLogDir))
+        {
+            items.Add(new Markup("[dim]  No copilot logs directory found[/]"));
+            items.Add(Text.Empty);
+            return new Rows(items);
+        }
+
+        // Find the most recent log files (last 5)
+        var logFiles = new DirectoryInfo(copilotLogDir)
+            .GetFiles("*.log")
+            .OrderByDescending(f => f.LastWriteTime)
+            .Take(5)
+            .ToList();
+
+        if (!logFiles.Any())
+        {
+            items.Add(new Markup("[dim]  No log files found[/]"));
+            items.Add(Text.Empty);
+            return new Rows(items);
+        }
+
+        // Aggregate stats
+        var modelStats = new Dictionary<string, (int calls, long promptTokens, long completionTokens, long cachedTokens, double totalCost)>();
+        int premiumRequests = 0;
+        long totalPromptTokens = 0;
+        long totalCompletionTokens = 0;
+        long totalCachedTokens = 0;
+        double totalCost = 0;
+
+        foreach (var logFile in logFiles)
+        {
+            try
+            {
+                using var fs = new FileStream(logFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(fs);
+                string? line;
+                
+                while ((line = reader.ReadLine()) != null)
+                {
+                    // Parse assistant_usage events
+                    if (line.Contains("\"kind\": \"assistant_usage\""))
+                    {
+                        // Read the next ~30 lines to get the full JSON object
+                        var jsonLines = new List<string> { line };
+                        for (int i = 0; i < 30; i++)
+                        {
+                            var nextLine = reader.ReadLine();
+                            if (nextLine == null) break;
+                            jsonLines.Add(nextLine);
+                            if (nextLine.Trim() == "},") break;
+                        }
+                        
+                        var jsonText = string.Join("\n", jsonLines);
+                        
+                        // Extract model name
+                        var modelMatch = Regex.Match(jsonText, "\"model\":\\s*\"([^\"]+)\"");
+                        var model = modelMatch.Success ? modelMatch.Groups[1].Value : "unknown";
+                        
+                        // Check if premium (opus models)
+                        if (model.Contains("opus"))
+                        {
+                            premiumRequests++;
+                        }
+                        
+                        // Extract metrics
+                        var inputTokensMatch = Regex.Match(jsonText, "\"input_tokens\":\\s*(\\d+)");
+                        var outputTokensMatch = Regex.Match(jsonText, "\"output_tokens\":\\s*(\\d+)");
+                        var cacheReadMatch = Regex.Match(jsonText, "\"cache_read_tokens\":\\s*(\\d+)");
+                        var costMatch = Regex.Match(jsonText, "\"cost\":\\s*([\\d.]+)");
+                        
+                        var inputTokens = inputTokensMatch.Success ? long.Parse(inputTokensMatch.Groups[1].Value) : 0;
+                        var outputTokens = outputTokensMatch.Success ? long.Parse(outputTokensMatch.Groups[1].Value) : 0;
+                        var cacheRead = cacheReadMatch.Success ? long.Parse(cacheReadMatch.Groups[1].Value) : 0;
+                        var cost = costMatch.Success ? double.Parse(costMatch.Groups[1].Value) : 0;
+                        
+                        totalPromptTokens += inputTokens;
+                        totalCompletionTokens += outputTokens;
+                        totalCachedTokens += cacheRead;
+                        totalCost += cost;
+                        
+                        // Aggregate by model
+                        if (!modelStats.ContainsKey(model))
+                        {
+                            modelStats[model] = (0, 0, 0, 0, 0);
+                        }
+                        var stats = modelStats[model];
+                        modelStats[model] = (
+                            stats.calls + 1,
+                            stats.promptTokens + inputTokens,
+                            stats.completionTokens + outputTokens,
+                            stats.cachedTokens + cacheRead,
+                            stats.totalCost + cost
+                        );
+                    }
+                }
+            }
+            catch
+            {
+                // Skip files that can't be read
+            }
+        }
+
+        if (modelStats.Count == 0)
+        {
+            items.Add(new Markup("[dim]  No usage data found in recent logs[/]"));
+            items.Add(Text.Empty);
+            return new Rows(items);
+        }
+
+        // Build summary table
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .BorderColor(Color.Grey)
+            .AddColumn(new TableColumn("[dim]Model[/]").LeftAligned())
+            .AddColumn(new TableColumn("[dim]Calls[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Prompt[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Completion[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Cached[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Cache %[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Cost[/]").RightAligned());
+
+        foreach (var kvp in modelStats.OrderByDescending(x => x.Value.calls))
+        {
+            var model = kvp.Key;
+            var stats = kvp.Value;
+            
+            // Shorten model name for display
+            var displayModel = model
+                .Replace("claude-", "")
+                .Replace("gpt-", "");
+            if (displayModel.Length > 20)
+                displayModel = displayModel.Substring(0, 17) + "...";
+            
+            // Calculate cache hit percentage
+            var totalTokens = stats.promptTokens + stats.cachedTokens;
+            var cachePercent = totalTokens > 0 ? (double)stats.cachedTokens / totalTokens * 100 : 0;
+            var cacheColor = cachePercent > 50 ? "green" : cachePercent > 20 ? "yellow" : "dim";
+            
+            // Format token counts (K for thousands, M for millions)
+            var promptStr = FormatTokenCount(stats.promptTokens);
+            var completionStr = FormatTokenCount(stats.completionTokens);
+            var cachedStr = FormatTokenCount(stats.cachedTokens);
+            
+            // Cost color: green for low, yellow for medium, red for high
+            var costColor = stats.totalCost < 5 ? "green" : stats.totalCost < 20 ? "yellow" : "red";
+            
+            table.AddRow(
+                $"[cyan]{Markup.Escape(displayModel)}[/]",
+                $"[white]{stats.calls}[/]",
+                $"[blue]{promptStr}[/]",
+                $"[green]{completionStr}[/]",
+                $"[yellow]{cachedStr}[/]",
+                $"[{cacheColor}]{cachePercent:F0}%[/]",
+                $"[{costColor}]${stats.totalCost:F2}[/]"
+            );
+        }
+
+        items.Add(table);
+        
+        // Add summary line
+        var totalCachePercent = (totalPromptTokens + totalCachedTokens) > 0 
+            ? (double)totalCachedTokens / (totalPromptTokens + totalCachedTokens) * 100 
+            : 0;
+        var totalCalls = modelStats.Values.Sum(s => s.calls);
+        
+        items.Add(new Markup($"  [dim]Total:[/] {totalCalls} calls  |  " +
+                            $"Prompt: [blue]{FormatTokenCount(totalPromptTokens)}[/]  |  " +
+                            $"Completion: [green]{FormatTokenCount(totalCompletionTokens)}[/]  |  " +
+                            $"Cached: [yellow]{FormatTokenCount(totalCachedTokens)}[/] ([cyan]{totalCachePercent:F0}%[/])  |  " +
+                            $"Premium: [magenta]{premiumRequests}[/]  |  " +
+                            $"Cost: [white]${totalCost:F2}[/]"));
+    }
+    catch (Exception ex)
+    {
+        items.Add(new Markup($"[red]  Error reading token stats: {Markup.Escape(ex.Message)}[/]"));
+    }
+
+    items.Add(Text.Empty);
+    return new Rows(items);
+}
+
+static string FormatTokenCount(long count)
+{
+    if (count >= 1_000_000)
+        return $"{count / 1_000_000.0:F1}M";
+    if (count >= 1_000)
+        return $"{count / 1_000.0:F1}K";
+    return count.ToString();
+}
+
 static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
 {
     var items = new List<IRenderable>();
@@ -917,53 +1116,276 @@ static IRenderable BuildDetailedOrchestrationSection(List<AgentActivity> activit
     return new Rows(items);
 }
 
-// ─── Live Agent Feed Section ────────────────────────────────────────────────
+// ─── Live Agent Feed Section (Multi-Session) ────────────────────────────────
 
 static IRenderable BuildLiveAgentFeedSection(string userProfile)
 {
     var items = new List<IRenderable>();
-    var section = new Rule("[green bold]Live Agent Feed[/] [dim](~/.agency/logs)[/]") { Justification = Justify.Left };
+    var section = new Rule("[green bold]Live Agent Feed — Multi-Session View[/]") { Justification = Justify.Left };
     items.Add(section);
 
     try
     {
+        var now = DateTime.Now;
+        var activeSessions = new List<SessionInfo>();
+        var allFeedEntries = new List<FeedEntry>();
+
+        // Scan Agency sessions (~/.agency/logs)
         var agencyLogDir = Path.Combine(userProfile, ".agency", "logs");
-        if (!Directory.Exists(agencyLogDir))
+        if (Directory.Exists(agencyLogDir))
         {
-            items.Add(new Markup("[dim]  No agency logs directory found[/]"));
+            var agencySessions = new DirectoryInfo(agencyLogDir)
+                .GetDirectories()
+                .Where(d => (now - d.LastWriteTime).TotalMinutes <= 30)
+                .ToList();
+
+            foreach (var sessionDir in agencySessions)
+            {
+                var logFiles = sessionDir.GetFiles("*.log").Where(f => f.Length > 0).ToList();
+                if (logFiles.Count == 0) continue;
+
+                var sessionName = DeriveSessionName(sessionDir.Name);
+                var sessionAge = now - sessionDir.LastWriteTime;
+                var lastWrite = sessionDir.LastWriteTime;
+                var pidCount = CountProcessesInSession(logFiles);
+
+                activeSessions.Add(new SessionInfo
+                {
+                    Name = sessionName,
+                    FullPath = sessionDir.FullName,
+                    Age = sessionAge,
+                    LastWrite = lastWrite,
+                    ProcessCount = pidCount,
+                    Type = "Agency"
+                });
+
+                // Extract feed entries from this session
+                foreach (var logFile in logFiles)
+                {
+                    var entries = ExtractFeedEntriesFromLog(logFile.FullName, sessionName);
+                    allFeedEntries.AddRange(entries);
+                }
+            }
+        }
+
+        // Scan Copilot CLI sessions (~/.copilot/logs)
+        var copilotLogDir = Path.Combine(userProfile, ".copilot", "logs");
+        if (Directory.Exists(copilotLogDir))
+        {
+            var copilotLogs = new DirectoryInfo(copilotLogDir)
+                .GetFiles("copilot-*.log")
+                .Where(f => f.Length > 0 && (now - f.LastWriteTime).TotalMinutes <= 30)
+                .ToList();
+
+            foreach (var logFile in copilotLogs)
+            {
+                var sessionName = DeriveSessionName(logFile.Name.Replace(".log", ""));
+                var sessionAge = now - logFile.LastWriteTime;
+
+                activeSessions.Add(new SessionInfo
+                {
+                    Name = sessionName,
+                    FullPath = logFile.FullName,
+                    Age = sessionAge,
+                    LastWrite = logFile.LastWriteTime,
+                    ProcessCount = 1,
+                    Type = "CLI"
+                });
+
+                var entries = ExtractFeedEntriesFromLog(logFile.FullName, sessionName);
+                allFeedEntries.AddRange(entries);
+            }
+        }
+
+        // Count MCP server processes (heuristic: look for mcp-server processes)
+        var mcpCount = CountMcpServers();
+
+        // Display Overview Panel
+        if (activeSessions.Count > 0)
+        {
+            var totalProcesses = activeSessions.Sum(s => s.ProcessCount);
+            items.Add(new Markup($"  [bold]Active Sessions:[/] {activeSessions.Count}  |  " +
+                                $"[bold]Copilot Processes:[/] {totalProcesses}  |  " +
+                                $"[bold]MCP Servers:[/] {mcpCount}"));
+            items.Add(Text.Empty);
+
+            // Session table
+            var sessionTable = new Table()
+                .BorderColor(Color.Grey)
+                .Border(TableBorder.Simple)
+                .AddColumn(new TableColumn("Session").Width(35))
+                .AddColumn(new TableColumn("PIDs").Width(6))
+                .AddColumn(new TableColumn("Age").Width(8))
+                .AddColumn(new TableColumn("Last Write").Width(12))
+                .AddColumn(new TableColumn("Type").Width(8));
+
+            foreach (var session in activeSessions.OrderByDescending(s => s.LastWrite))
+            {
+                var ageStr = FormatAge(session.Age);
+                var lastWriteStr = FormatAge(now - session.LastWrite);
+                var typeColor = session.Type == "Agency" ? "cyan" : "yellow";
+
+                sessionTable.AddRow(
+                    $"[white]{Markup.Escape(session.Name)}[/]",
+                    $"[dim]{session.ProcessCount}[/]",
+                    $"[dim]{ageStr}[/]",
+                    $"[green]{lastWriteStr}[/]",
+                    $"[{typeColor}]{session.Type}[/]");
+            }
+
+            items.Add(sessionTable);
+            items.Add(Text.Empty);
+        }
+        else
+        {
+            items.Add(new Markup("[dim]  No active sessions found in the last 30 minutes[/]"));
             items.Add(Text.Empty);
             return new Rows(items);
         }
 
-        // Find the latest session directory
-        var latestSession = new DirectoryInfo(agencyLogDir)
-            .GetDirectories()
-            .OrderByDescending(d => d.LastWriteTime)
-            .FirstOrDefault();
-
-        if (latestSession == null)
+        // Merged Activity Feed
+        if (allFeedEntries.Count > 0)
         {
-            items.Add(new Markup("[dim]  No agency sessions found[/]"));
+            // Sort chronologically and take last 20
+            var recentEntries = allFeedEntries
+                .OrderBy(e => e.TimeValue)
+                .TakeLast(20)
+                .ToList();
+
+            items.Add(new Markup("[bold]Merged Activity Feed (last 20 entries):[/]"));
             items.Add(Text.Empty);
-            return new Rows(items);
+
+            var activityTable = new Table()
+                .BorderColor(Color.Grey)
+                .Border(TableBorder.Simple)
+                .AddColumn(new TableColumn("Time").Width(10))
+                .AddColumn(new TableColumn("").Width(3))
+                .AddColumn(new TableColumn("Session").Width(25))
+                .AddColumn(new TableColumn("Activity").Width(60));
+
+            var sessionColors = AssignSessionColors(activeSessions.Select(s => s.Name).ToList());
+
+            foreach (var entry in recentEntries)
+            {
+                var sessionColor = sessionColors.ContainsKey(entry.SessionName) 
+                    ? sessionColors[entry.SessionName] 
+                    : "white";
+
+                activityTable.AddRow(
+                    $"[dim]{Markup.Escape(entry.Time)}[/]",
+                    entry.Icon,
+                    $"[{sessionColor}]{Markup.Escape(entry.SessionName)}[/]",
+                    Markup.Escape(entry.Text));
+            }
+
+            items.Add(activityTable);
         }
-
-        // Find the most recently written log file
-        var logFile = latestSession.GetFiles("*.log")
-            .OrderByDescending(f => f.LastWriteTime)
-            .FirstOrDefault();
-
-        if (logFile == null || logFile.Length == 0)
+        else
         {
-            items.Add(new Markup("[dim]  No log files in current session[/]"));
-            items.Add(Text.Empty);
-            return new Rows(items);
+            items.Add(new Markup("[dim]  No recent activity detected in any session[/]"));
         }
+    }
+    catch (Exception ex)
+    {
+        items.Add(new Markup($"[red]  Error reading session logs: {Markup.Escape(ex.Message)}[/]"));
+    }
 
-        // Read the tail of the log
-        var tailSize = Math.Min(150000, logFile.Length);
+    items.Add(Text.Empty);
+    return new Rows(items);
+}
+
+// ─── Helper Methods for Multi-Session View ─────────────────────
+
+static string DeriveSessionName(string dirOrFileName)
+{
+    // Extract meaningful session identifier
+    // Examples: "session_20260310_093304_86684" -> "093304_86684"
+    //           "copilot-12345" -> "CLI-12345"
+    
+    if (dirOrFileName.StartsWith("copilot-"))
+    {
+        return "CLI-" + dirOrFileName.Replace("copilot-", "").Substring(0, Math.Min(8, dirOrFileName.Length - 8));
+    }
+
+    if (dirOrFileName.StartsWith("session_"))
+    {
+        var parts = dirOrFileName.Split('_');
+        if (parts.Length >= 4)
+        {
+            return $"{parts[2].Substring(4)}_{parts[3].Substring(0, Math.Min(5, parts[3].Length))}"; // "093304_86684"
+        }
+    }
+
+    // Fallback: first 20 chars
+    return dirOrFileName.Substring(0, Math.Min(20, dirOrFileName.Length));
+}
+
+static int CountProcessesInSession(List<FileInfo> logFiles)
+{
+    // Heuristic: count unique PID references in log files
+    var pidPattern = new Regex(@"pid[""':\s]+(\d+)", RegexOptions.IgnoreCase);
+    var pids = new HashSet<string>();
+
+    foreach (var logFile in logFiles.Take(3)) // Check first 3 logs only for performance
+    {
+        try
+        {
+            var sampleSize = Math.Min(50000, logFile.Length);
+            using var fs = new FileStream(logFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            fs.Seek(-sampleSize, SeekOrigin.End);
+            using var reader = new StreamReader(fs);
+            var sample = reader.ReadToEnd();
+
+            foreach (Match match in pidPattern.Matches(sample))
+            {
+                pids.Add(match.Groups[1].Value);
+            }
+        }
+        catch { }
+    }
+
+    return Math.Max(1, pids.Count);
+}
+
+static int CountMcpServers()
+{
+    try
+    {
+        // Windows: look for node processes running mcp servers
+        var psi = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = "-NoProfile -Command \"(Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*mcp*' -or $_.MainWindowTitle -like '*mcp*' }).Count\"",
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var proc = Process.Start(psi);
+        if (proc == null) return 0;
+
+        var output = proc.StandardOutput.ReadToEnd().Trim();
+        proc.WaitForExit(3000);
+
+        if (int.TryParse(output, out var count))
+            return count;
+    }
+    catch { }
+
+    return 0;
+}
+
+static List<FeedEntry> ExtractFeedEntriesFromLog(string logPath, string sessionName)
+{
+    var entries = new List<FeedEntry>();
+
+    try
+    {
+        var fileInfo = new FileInfo(logPath);
+        var tailSize = Math.Min(100000, fileInfo.Length);
         string tail;
-        using (var fs = new FileStream(logFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+
+        using (var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
         {
             fs.Seek(-tailSize, SeekOrigin.End);
             using var reader = new StreamReader(fs);
@@ -971,48 +1393,50 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         }
 
         var lines = tail.Split('\n');
-        var feedEntries = new List<(string time, string icon, string text)>();
+        var baseDate = DateTime.Now.Date; // Assume today's logs
 
         for (int i = 0; i < lines.Length; i++)
         {
             var trimmed = lines[i].Trim();
 
-            // Function calls with arguments — this is what the agent is DOING
+            // Function calls with arguments
             if (trimmed.Contains("\"name\":") && !trimmed.Contains("\"function\"") && !trimmed.Contains("description"))
             {
                 var fnMatch = Regex.Match(trimmed, "\"name\":\\s*\"([^\"]+)\"");
                 if (!fnMatch.Success) continue;
                 var toolName = fnMatch.Groups[1].Value;
                 if (toolName == "report_intent" || toolName == "stop_powershell" || toolName.Length > 50) continue;
-                
-                // Only process if the next line has "arguments" (not "parameters" which is schema)
+
                 if (i + 1 >= lines.Length || !lines[i + 1].Contains("\"arguments\":")) continue;
-                
-                // Look at next line for arguments with description/command/intent
+
                 var detail = "";
                 if (i + 1 < lines.Length && lines[i + 1].Contains("\"arguments\":"))
                 {
                     var argsLine = lines[i + 1];
-                    var descM = Regex.Match(argsLine, "\\\\\"description\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
+                    var descM = Regex.Match(argsLine, "\\\\\"description\\\\\":\\s*\\\\\"([^\\\\]{1,60})");
                     if (descM.Success) detail = descM.Groups[1].Value;
-                    else {
-                        var cmdM = Regex.Match(argsLine, "\\\\\"command\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
+                    else
+                    {
+                        var cmdM = Regex.Match(argsLine, "\\\\\"command\\\\\":\\s*\\\\\"([^\\\\]{1,60})");
                         if (cmdM.Success) detail = cmdM.Groups[1].Value.Replace("\\n", " ");
                     }
-                    var intentM = Regex.Match(argsLine, "\\\\\"intent\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
+                    var intentM = Regex.Match(argsLine, "\\\\\"intent\\\\\":\\s*\\\\\"([^\\\\]{1,60})");
                     if (intentM.Success) detail = intentM.Groups[1].Value;
-                    var questM = Regex.Match(argsLine, "\\\\\"question\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
-                    if (questM.Success) detail = "Q: " + questM.Groups[1].Value;
-                    var promptM = Regex.Match(argsLine, "\\\\\"prompt\\\\\":\\s*\\\\\"([^\\\\]{1,80})");
-                    if (promptM.Success && string.IsNullOrEmpty(detail)) detail = promptM.Groups[1].Value;
                 }
 
-                // Get timestamp from a nearby log line (search backwards for a timestamp)
                 var time = "??:??:??";
+                DateTime timeValue = DateTime.MinValue;
                 for (int k = i; k >= Math.Max(0, i - 20); k--)
                 {
-                    var tm = Regex.Match(lines[k], @"(\d{2}:\d{2}:\d{2})");
-                    if (tm.Success) { time = tm.Value; break; }
+                    var tm = Regex.Match(lines[k], @"(\d{2}):(\d{2}):(\d{2})");
+                    if (tm.Success)
+                    {
+                        time = tm.Value;
+                        timeValue = baseDate.AddHours(int.Parse(tm.Groups[1].Value))
+                                            .AddMinutes(int.Parse(tm.Groups[2].Value))
+                                            .AddSeconds(int.Parse(tm.Groups[3].Value));
+                        break;
+                    }
                 }
 
                 var icon = toolName switch
@@ -1024,97 +1448,44 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                     "grep" => "🔍",
                     "glob" => "🔍",
                     "task" => "🤖",
-                    "read_agent" => "🤖",
-                    "read_powershell" => "📟",
-                    "write_powershell" => "⌨️",
-                    "ask_user" => "❓",
                     _ when toolName.StartsWith("github-mcp") => "🔗",
                     _ when toolName.StartsWith("azure-devops") => "🔗",
-                    _ when toolName.Contains("workiq") => "📧",
-                    _ when toolName.Contains("playwright") => "🌐",
                     _ => "🔧"
                 };
+
                 var displayText = string.IsNullOrEmpty(detail) ? toolName : $"{toolName} → {detail}";
-                if (displayText.Length > 95) displayText = displayText.Substring(0, 92) + "...";
-                if (time != "??:??:??") // Only show entries with valid timestamps
-                    feedEntries.Add((time, icon, displayText));
-            }
-            // Agent completion system notifications
-            else if (trimmed.Contains("System notification: Agent"))
-            {
-                var timeMatch = Regex.Match(trimmed, @"(\d{2}:\d{2}:\d{2})");
-                var time = timeMatch.Success ? timeMatch.Value : "??:??:??";
-                var agentMatch = Regex.Match(trimmed, "Agent \"([^\"]+)\" \\(([^)]+)\\)");
-                if (agentMatch.Success)
+                if (displayText.Length > 55) displayText = displayText.Substring(0, 52) + "...";
+
+                if (time != "??:??:??")
                 {
-                    var agentId = agentMatch.Groups[1].Value;
-                    var agentType = agentMatch.Groups[2].Value;
-                    var completed = trimmed.Contains("completed successfully");
-                    var icon = completed ? "✅" : "❌";
-                    feedEntries.Add((time, icon, $"Agent {agentId} ({agentType}) {(completed ? "completed" : "finished")}"));
+                    entries.Add(new FeedEntry
+                    {
+                        Time = time,
+                        TimeValue = timeValue,
+                        Icon = icon,
+                        Text = displayText,
+                        SessionName = sessionName
+                    });
                 }
             }
-            // Shell command completion notifications
-            else if (trimmed.Contains("System notification: Shell command"))
-            {
-                var timeMatch = Regex.Match(trimmed, @"(\d{2}:\d{2}:\d{2})");
-                var time = timeMatch.Success ? timeMatch.Value : "??:??:??";
-                var cmdMatch = Regex.Match(trimmed, "Shell command \"([^\"]+)\"");
-                var desc = cmdMatch.Success ? cmdMatch.Groups[1].Value : "shell command";
-                if (desc.Length > 60) desc = desc.Substring(0, 57) + "...";
-                feedEntries.Add((time, "📟", $"Shell: {desc}"));
-            }
-            // Model calls (AI reasoning turns)
-            else if (trimmed.Contains("[Telemetry] cli.model_call:"))
-            {
-                var timeMatch = Regex.Match(trimmed, @"(\d{2}:\d{2}:\d{2})");
-                var time = timeMatch.Success ? timeMatch.Value : "??:??:??";
-                feedEntries.Add((time, "🧠", "AI model reasoning turn"));
-            }
-        }
-
-        // Show last 12 entries
-        var recent = feedEntries.TakeLast(12).ToList();
-
-        if (recent.Count == 0)
-        {
-            items.Add(new Markup("[dim]  No recent agent activity detected in logs[/]"));
-        }
-        else
-        {
-            // Add session info header
-            var sessionAge = DateTime.Now - logFile.LastWriteTime;
-            var sessionAgeStr = sessionAge.TotalMinutes < 1 ? "just now" :
-                                sessionAge.TotalMinutes < 60 ? $"{(int)sessionAge.TotalMinutes}m ago" :
-                                $"{(int)sessionAge.TotalHours}h ago";
-            items.Add(new Markup($"  [dim]Session:[/] {Markup.Escape(latestSession.Name)}  [dim]Last write:[/] {sessionAgeStr}  [dim]Entries:[/] {feedEntries.Count} total"));
-            items.Add(Text.Empty);
-
-            var table = new Table()
-                .BorderColor(Color.Grey)
-                .Border(TableBorder.Simple)
-                .AddColumn(new TableColumn("Time").Width(10))
-                .AddColumn(new TableColumn("").Width(3))
-                .AddColumn(new TableColumn("Activity").Width(80));
-
-            foreach (var entry in recent)
-            {
-                table.AddRow(
-                    $"[dim]{Markup.Escape(entry.time)}[/]",
-                    entry.icon,
-                    Markup.Escape(entry.text));
-            }
-
-            items.Add(table);
         }
     }
-    catch (Exception ex)
+    catch { }
+
+    return entries;
+}
+
+static Dictionary<string, string> AssignSessionColors(List<string> sessionNames)
+{
+    var colors = new[] { "cyan", "yellow", "green", "magenta", "blue", "orange1" };
+    var colorMap = new Dictionary<string, string>();
+
+    for (int i = 0; i < sessionNames.Count; i++)
     {
-        items.Add(new Markup($"[red]  Error reading agency logs: {Markup.Escape(ex.Message)}[/]"));
+        colorMap[sessionNames[i]] = colors[i % colors.Length];
     }
 
-    items.Add(Text.Empty);
-    return new Rows(items);
+    return colorMap;
 }
 
 // ─── Ralph Heartbeat Panel ──────────────────────────────────────────────────
@@ -1667,4 +2038,23 @@ record AgentActivity
     public required string Status { get; init; }
     public required string Task { get; init; }
     public required string Outcome { get; init; }
+}
+
+class SessionInfo
+{
+    public string Name { get; set; } = "";
+    public string FullPath { get; set; } = "";
+    public TimeSpan Age { get; set; }
+    public DateTime LastWrite { get; set; }
+    public int ProcessCount { get; set; }
+    public string Type { get; set; } = "";
+}
+
+class FeedEntry
+{
+    public string Time { get; set; } = "";
+    public DateTime TimeValue { get; set; }
+    public string Icon { get; set; } = "";
+    public string Text { get; set; } = "";
+    public string SessionName { get; set; } = "";
 }
