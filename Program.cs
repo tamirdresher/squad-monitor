@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 var interval = 5;
 var runOnce = false;
 var orchestrationOnlyMode = false;
+var disableGitHub = false;
 var teamRoot = FindTeamRoot();
 var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
@@ -22,6 +23,10 @@ for (int i = 0; i < args.Length; i++)
     {
         runOnce = true;
     }
+    else if (args[i] == "--no-github")
+    {
+        disableGitHub = true;
+    }
 }
 
 if (teamRoot == null)
@@ -30,8 +35,18 @@ if (teamRoot == null)
     return 1;
 }
 
+// Auto-detect GitHub CLI availability
+if (!disableGitHub && !IsGhCliAvailable())
+{
+    disableGitHub = true;
+}
+
 AnsiConsole.MarkupLine($"[dim]Squad Monitor v2 - Refresh interval: {interval}s[/]");
 AnsiConsole.MarkupLine($"[dim]Team root: {teamRoot}[/]");
+if (disableGitHub)
+{
+    AnsiConsole.MarkupLine($"[dim]GitHub integration: disabled (gh CLI not available)[/]");
+}
 AnsiConsole.MarkupLine($"[dim]Press 'o' or 'O' to toggle orchestration-only view[/]");
 AnsiConsole.WriteLine();
 
@@ -48,9 +63,15 @@ if (runOnce)
 
     DisplayRalphHeartbeat(userProfile);
     DisplayRalphLog(userProfile);
-    DisplayGitHubIssues(teamRoot);
-    DisplayGitHubPRs(teamRoot);
-    DisplayRecentlyMergedPRs(teamRoot);
+    
+    // Only display GitHub sections if not disabled
+    if (!disableGitHub)
+    {
+        DisplayGitHubIssues(teamRoot);
+        DisplayGitHubPRs(teamRoot);
+        DisplayRecentlyMergedPRs(teamRoot);
+    }
+    
     var activities = LoadActivities(teamRoot);
     DisplayOrchestrationLog(activities);
     
@@ -82,7 +103,7 @@ else
                 var now = DateTime.Now;
                 var content = orchestrationOnlyMode 
                     ? BuildOrchestrationOnlyContent(now, userProfile, teamRoot)
-                    : BuildDashboardContent(now, userProfile, teamRoot);
+                    : BuildDashboardContent(now, userProfile, teamRoot, disableGitHub);
                 layout.Update(content);
                 ctx.Refresh();
 
@@ -98,7 +119,7 @@ return 0;
 
 // ─── Dashboard Content Builder ─────────────────────────────────────────────
 
-static IRenderable BuildDashboardContent(DateTime now, string userProfile, string teamRoot)
+static IRenderable BuildDashboardContent(DateTime now, string userProfile, string teamRoot, bool disableGitHub)
 {
     var sections = new List<IRenderable>();
 
@@ -128,14 +149,18 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
     // Ralph Watch Log
     sections.Add(BuildRalphLogSection(userProfile));
     
-    // GitHub Issues (limited by terminal height)
-    sections.Add(BuildGitHubIssuesSection(teamRoot, maxIssueRows));
-    
-    // GitHub PRs
-    sections.Add(BuildGitHubPRsSection(teamRoot));
-    
-    // Recently Merged PRs
-    sections.Add(BuildRecentlyMergedPRsSection(teamRoot));
+    // GitHub sections - only add if GitHub is not disabled
+    if (!disableGitHub)
+    {
+        // GitHub Issues (limited by terminal height)
+        sections.Add(BuildGitHubIssuesSection(teamRoot, maxIssueRows));
+        
+        // GitHub PRs
+        sections.Add(BuildGitHubPRsSection(teamRoot));
+        
+        // Recently Merged PRs
+        sections.Add(BuildRecentlyMergedPRsSection(teamRoot));
+    }
     
     // Orchestration Log
     var activities = LoadActivities(teamRoot);
@@ -224,6 +249,32 @@ static string? RunProcess(string fileName, string arguments, string? workingDire
     catch
     {
         return null;
+    }
+}
+
+static bool IsGhCliAvailable()
+{
+    try
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "gh",
+            Arguments = "--version",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var proc = Process.Start(psi);
+        if (proc == null) return false;
+
+        proc.WaitForExit(3000);
+        return proc.ExitCode == 0;
+    }
+    catch
+    {
+        return false;
     }
 }
 
