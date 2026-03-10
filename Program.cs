@@ -1159,11 +1159,20 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                     Type = "Agency"
                 });
 
-                // Extract feed entries from this session
-                foreach (var logFile in logFiles)
+                // Prefer events.jsonl for structured data; fall back to process logs
+                var eventsFile = Path.Combine(sessionDir.FullName, "events.jsonl");
+                if (File.Exists(eventsFile) && new FileInfo(eventsFile).Length > 0)
                 {
-                    var entries = ExtractFeedEntriesFromLog(logFile.FullName, sessionName);
+                    var entries = ExtractFeedEntriesFromEvents(eventsFile, sessionName);
                     allFeedEntries.AddRange(entries);
+                }
+                else
+                {
+                    foreach (var logFile in logFiles.Where(f => f.Name.StartsWith("process-")))
+                    {
+                        var entries = ExtractFeedEntriesFromLog(logFile.FullName, sessionName);
+                        allFeedEntries.AddRange(entries);
+                    }
                 }
             }
         }
@@ -1375,6 +1384,149 @@ static int CountMcpServers()
     return 0;
 }
 
+static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string sessionName)
+{
+    var entries = new List<FeedEntry>();
+
+    try
+    {
+        var fileInfo = new FileInfo(eventsPath);
+        var tailSize = Math.Min(200000, fileInfo.Length);
+        string tail;
+
+        using (var fs = new FileStream(eventsPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            if (fileInfo.Length > tailSize)
+                fs.Seek(-tailSize, SeekOrigin.End);
+            using var reader = new StreamReader(fs);
+            tail = reader.ReadToEnd();
+        }
+
+        var lines = tail.Split('\n');
+
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            try
+            {
+                var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                var eventType = root.GetProperty("type").GetString() ?? "";
+                var timestamp = root.GetProperty("timestamp").GetString() ?? "";
+
+                if (!DateTime.TryParse(timestamp, CultureInfo.InvariantCulture,
+                    DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dt))
+                    continue;
+
+                var localDt = dt.ToLocalTime();
+                var timeStr = localDt.ToString("HH:mm:ss");
+                var data = root.GetProperty("data");
+
+                if (eventType == "tool.execution_start")
+                {
+                    var toolName = data.GetProperty("toolName").GetString() ?? "";
+                    if (toolName == "report_intent" || toolName == "stop_powershell" || toolName.Length > 60) continue;
+
+                    var detail = "";
+                    if (data.TryGetProperty("arguments", out var args))
+                    {
+                        if (args.TryGetProperty("description", out var descProp))
+                            detail = descProp.GetString() ?? "";
+                        else if (args.TryGetProperty("intent", out var intentProp))
+                            detail = intentProp.GetString() ?? "";
+                        else if (args.TryGetProperty("command", out var cmdProp))
+                        {
+                            detail = (cmdProp.GetString() ?? "").Replace("\n", " ");
+                            if (detail.Length > 50) detail = detail.Substring(0, 47) + "...";
+                        }
+                        else if (args.TryGetProperty("path", out var pathProp))
+                            detail = pathProp.GetString() ?? "";
+                        else if (args.TryGetProperty("pattern", out var patProp))
+                            detail = patProp.GetString() ?? "";
+                        else if (args.TryGetProperty("prompt", out var promptProp))
+                        {
+                            detail = (promptProp.GetString() ?? "");
+                            if (detail.Length > 50) detail = detail.Substring(0, 47) + "...";
+                        }
+                        else if (args.TryGetProperty("query", out var queryProp))
+                            detail = queryProp.GetString() ?? "";
+                        else if (args.TryGetProperty("summary", out var summaryProp))
+                        {
+                            detail = (summaryProp.GetString() ?? "");
+                            if (detail.Length > 50) detail = detail.Substring(0, 47) + "...";
+                        }
+                    }
+
+                    var icon = GetToolIcon(toolName);
+                    var displayText = string.IsNullOrEmpty(detail) ? toolName : $"{toolName} → {detail}";
+                    if (displayText.Length > 70) displayText = displayText.Substring(0, 67) + "...";
+
+                    entries.Add(new FeedEntry
+                    {
+                        Time = timeStr,
+                        TimeValue = localDt,
+                        Icon = icon,
+                        Text = displayText,
+                        SessionName = sessionName
+                    });
+                }
+                else if (eventType == "subagent.started")
+                {
+                    var agentName = data.TryGetProperty("agentDisplayName", out var dn) ? dn.GetString() ?? "" :
+                                    data.TryGetProperty("agentName", out var an) ? an.GetString() ?? "" : "sub-agent";
+                    entries.Add(new FeedEntry
+                    {
+                        Time = timeStr,
+                        TimeValue = localDt,
+                        Icon = "🤖",
+                        Text = $"Spawned {agentName}",
+                        SessionName = sessionName
+                    });
+                }
+                else if (eventType == "subagent.completed")
+                {
+                    entries.Add(new FeedEntry
+                    {
+                        Time = timeStr,
+                        TimeValue = localDt,
+                        Icon = "✅",
+                        Text = "Sub-agent completed",
+                        SessionName = sessionName
+                    });
+                }
+                else if (eventType == "assistant.turn_start")
+                {
+                    var turnId = data.TryGetProperty("turnId", out var tid) ? tid.GetString() ?? "?" : "?";
+                    entries.Add(new FeedEntry
+                    {
+                        Time = timeStr,
+                        TimeValue = localDt,
+                        Icon = "💭",
+                        Text = $"Turn {turnId} started",
+                        SessionName = sessionName
+                    });
+                }
+                else if (eventType == "session.task_complete")
+                {
+                    entries.Add(new FeedEntry
+                    {
+                        Time = timeStr,
+                        TimeValue = localDt,
+                        Icon = "🏁",
+                        Text = "Task completed",
+                        SessionName = sessionName
+                    });
+                }
+            }
+            catch { }
+        }
+    }
+    catch { }
+
+    return entries;
+}
+
 static List<FeedEntry> ExtractFeedEntriesFromLog(string logPath, string sessionName)
 {
     var entries = new List<FeedEntry>();
@@ -1387,83 +1539,59 @@ static List<FeedEntry> ExtractFeedEntriesFromLog(string logPath, string sessionN
 
         using (var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
         {
-            fs.Seek(-tailSize, SeekOrigin.End);
+            if (fileInfo.Length > tailSize)
+                fs.Seek(-tailSize, SeekOrigin.End);
             using var reader = new StreamReader(fs);
             tail = reader.ReadToEnd();
         }
 
         var lines = tail.Split('\n');
-        var baseDate = DateTime.Now.Date; // Assume today's logs
+        // Regex for ISO 8601 timestamps at start of log lines
+        var timestampRegex = new Regex(@"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)");
 
         for (int i = 0; i < lines.Length; i++)
         {
             var trimmed = lines[i].Trim();
 
-            // Function calls with arguments
-            if (trimmed.Contains("\"name\":") && !trimmed.Contains("\"function\"") && !trimmed.Contains("description"))
+            // Parse tool invocation results: "2026-03-10T15:23:25.062Z [DEBUG] Tool invocation result: ### Ran Playwright code"
+            if (trimmed.Contains("Tool invocation result:"))
             {
-                var fnMatch = Regex.Match(trimmed, "\"name\":\\s*\"([^\"]+)\"");
-                if (!fnMatch.Success) continue;
-                var toolName = fnMatch.Groups[1].Value;
-                if (toolName == "report_intent" || toolName == "stop_powershell" || toolName.Length > 50) continue;
+                var resultMatch = Regex.Match(trimmed, @"Tool invocation result:\s*(?:###\s*)?(.+)$");
+                if (!resultMatch.Success) continue;
+                var resultText = resultMatch.Groups[1].Value.Trim();
+                if (resultText.Length > 60) resultText = resultText.Substring(0, 57) + "...";
 
-                if (i + 1 >= lines.Length || !lines[i + 1].Contains("\"arguments\":")) continue;
-
-                var detail = "";
-                if (i + 1 < lines.Length && lines[i + 1].Contains("\"arguments\":"))
-                {
-                    var argsLine = lines[i + 1];
-                    var descM = Regex.Match(argsLine, "\\\\\"description\\\\\":\\s*\\\\\"([^\\\\]{1,60})");
-                    if (descM.Success) detail = descM.Groups[1].Value;
-                    else
-                    {
-                        var cmdM = Regex.Match(argsLine, "\\\\\"command\\\\\":\\s*\\\\\"([^\\\\]{1,60})");
-                        if (cmdM.Success) detail = cmdM.Groups[1].Value.Replace("\\n", " ");
-                    }
-                    var intentM = Regex.Match(argsLine, "\\\\\"intent\\\\\":\\s*\\\\\"([^\\\\]{1,60})");
-                    if (intentM.Success) detail = intentM.Groups[1].Value;
-                }
-
-                var time = "??:??:??";
-                DateTime timeValue = DateTime.MinValue;
-                for (int k = i; k >= Math.Max(0, i - 20); k--)
-                {
-                    var tm = Regex.Match(lines[k], @"(\d{2}):(\d{2}):(\d{2})");
-                    if (tm.Success)
-                    {
-                        time = tm.Value;
-                        timeValue = baseDate.AddHours(int.Parse(tm.Groups[1].Value))
-                                            .AddMinutes(int.Parse(tm.Groups[2].Value))
-                                            .AddSeconds(int.Parse(tm.Groups[3].Value));
-                        break;
-                    }
-                }
-
-                var icon = toolName switch
-                {
-                    "powershell" => "⚡",
-                    "edit" => "✏️",
-                    "create" => "📄",
-                    "view" => "👁️",
-                    "grep" => "🔍",
-                    "glob" => "🔍",
-                    "task" => "🤖",
-                    _ when toolName.StartsWith("github-mcp") => "🔗",
-                    _ when toolName.StartsWith("azure-devops") => "🔗",
-                    _ => "🔧"
-                };
-
-                var displayText = string.IsNullOrEmpty(detail) ? toolName : $"{toolName} → {detail}";
-                if (displayText.Length > 55) displayText = displayText.Substring(0, 52) + "...";
-
-                if (time != "??:??:??")
+                if (TryParseLogTimestamp(trimmed, out var dt))
                 {
                     entries.Add(new FeedEntry
                     {
-                        Time = time,
-                        TimeValue = timeValue,
-                        Icon = icon,
-                        Text = displayText,
+                        Time = dt.ToLocalTime().ToString("HH:mm:ss"),
+                        TimeValue = dt.ToLocalTime(),
+                        Icon = "📋",
+                        Text = $"Result: {resultText}",
+                        SessionName = sessionName
+                    });
+                }
+                continue;
+            }
+
+            // Parse telemetry tool_call_executed lines for tool_name
+            if (trimmed.Contains("\"tool_name\"") && trimmed.Contains("tool_call_executed"))
+            {
+                var toolNameMatch = Regex.Match(trimmed, "\"tool_name\":\\s*\"([^\"]+)\"");
+                if (!toolNameMatch.Success) continue;
+                var toolName = toolNameMatch.Groups[1].Value;
+                if (toolName == "report_intent" || toolName == "stop_powershell") continue;
+
+                // Find timestamp by scanning upward
+                if (TryFindTimestampNearLine(lines, i, out var dt2))
+                {
+                    entries.Add(new FeedEntry
+                    {
+                        Time = dt2.ToLocalTime().ToString("HH:mm:ss"),
+                        TimeValue = dt2.ToLocalTime(),
+                        Icon = GetToolIcon(toolName),
+                        Text = toolName,
                         SessionName = sessionName
                     });
                 }
@@ -1473,6 +1601,49 @@ static List<FeedEntry> ExtractFeedEntriesFromLog(string logPath, string sessionN
     catch { }
 
     return entries;
+}
+
+static bool TryParseLogTimestamp(string line, out DateTime result)
+{
+    result = DateTime.MinValue;
+    var match = Regex.Match(line, @"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)");
+    if (match.Success && DateTime.TryParse(match.Groups[1].Value, CultureInfo.InvariantCulture,
+        DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out result))
+        return true;
+    return false;
+}
+
+static bool TryFindTimestampNearLine(string[] lines, int lineIndex, out DateTime result)
+{
+    result = DateTime.MinValue;
+    for (int k = lineIndex; k >= Math.Max(0, lineIndex - 30); k--)
+    {
+        if (TryParseLogTimestamp(lines[k].Trim(), out result))
+            return true;
+    }
+    return false;
+}
+
+static string GetToolIcon(string toolName)
+{
+    return toolName switch
+    {
+        "powershell" => "⚡",
+        "edit" => "✏️",
+        "create" => "📄",
+        "view" => "👁️",
+        "grep" => "🔍",
+        "glob" => "🔍",
+        "task" => "🤖",
+        "task_complete" => "🏁",
+        _ when toolName.StartsWith("github-mcp") => "🔗",
+        _ when toolName.StartsWith("azure-devops") => "🔗",
+        _ when toolName.StartsWith("playwright") => "🌐",
+        _ when toolName.StartsWith("workiq") => "📧",
+        _ when toolName.StartsWith("enghub") => "📚",
+        _ when toolName.Contains("search") => "🔍",
+        _ => "🔧"
+    };
 }
 
 static Dictionary<string, string> AssignSessionColors(List<string> sessionNames)
