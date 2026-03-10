@@ -7,10 +7,28 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>13.0</LangVersion>
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>true</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    
+    <!-- NuGet Package Metadata -->
+    <PackageId>squad-monitor</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Tamir Dresher</Authors>
+    <Description>Live terminal dashboard for monitoring AI agent orchestration. Track Copilot agents, GitHub activity, and orchestrator status in real-time.</Description>
+    <PackageProjectUrl>https://github.com/tamirdresher/squad-monitor</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/tamirdresher/squad-monitor.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>monitoring;dashboard;agent;orchestration;copilot;devtools</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    
+    <!-- Dotnet Tool Configuration -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>squad-monitor</ToolCommandName>
+    <PackageOutputPath>./nupkg</PackageOutputPath>
   </PropertyGroup>
+  
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.49.1" />
