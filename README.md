@@ -19,20 +19,43 @@ Live terminal dashboard for monitoring AI agent orchestration. See what your Cop
 
 ## Quick Start
 
+### Installation
+
+#### Option 1: Install as .NET Global Tool (Recommended)
+
+```bash
+dotnet tool install -g squad-monitor
+```
+
+Then run from anywhere:
+
+```bash
+squad-monitor
+```
+
+To update:
+
+```bash
+dotnet tool update -g squad-monitor
+```
+
+#### Option 2: Build from Source
+
+```bash
+git clone https://github.com/tamirdresher/squad-monitor.git
+cd squad-monitor
+dotnet run
+```
+
 ### Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download)
 - [GitHub CLI](https://cli.github.com/) (`gh`) — authenticated via `gh auth login`
 - A `.squad/` directory in your repo (created by the Squad orchestrator)
 
-### Build & Run
-
-```bash
-cd squad-monitor
-dotnet run
-```
-
 ### Options
+
+When running `squad-monitor` (either as a global tool or via `dotnet run`):
 
 | Flag | Description |
 |------|-------------|
