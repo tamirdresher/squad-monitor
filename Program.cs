@@ -61,6 +61,13 @@ if (runOnce)
     AnsiConsole.Write(header);
     AnsiConsole.WriteLine();
 
+    // Live Agent Feed (Multi-Session View)
+    var liveAgentFeed = BuildLiveAgentFeedSection(userProfile);
+    AnsiConsole.Write(liveAgentFeed);
+    
+    // Token Usage & Cost Stats
+    DisplayTokenStats(userProfile);
+
     DisplayRalphHeartbeat(userProfile);
     DisplayRalphLog(userProfile);
     
@@ -74,10 +81,6 @@ if (runOnce)
     
     var activities = LoadActivities(teamRoot);
     DisplayOrchestrationLog(activities);
-    
-    // Live Agent Feed
-    var liveAgentFeed = BuildLiveAgentFeedSection(userProfile);
-    AnsiConsole.Write(liveAgentFeed);
 }
 else
 {
@@ -142,6 +145,9 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
 
     // Live Agent Activity (tails agency/copilot logs) — top priority visibility
     sections.Add(BuildLiveAgentFeedSection(userProfile));
+    
+    // Token Usage & Cost Stats
+    sections.Add(BuildTokenStatsSection(userProfile));
 
     // Ralph Watch Heartbeat
     sections.Add(BuildRalphHeartbeatSection(userProfile));
@@ -1608,6 +1614,196 @@ static void DisplayRalphLog(string userProfile)
     catch
     {
         AnsiConsole.MarkupLine("[red]  Error reading ralph-watch.log[/]");
+    }
+
+    AnsiConsole.WriteLine();
+}
+
+// ─── Token Stats Panel ──────────────────────────────────────────────────────
+
+static void DisplayTokenStats(string userProfile)
+{
+    var section = new Rule("[magenta bold]Token Usage & Cost Stats[/] [dim](~/.copilot/logs)[/]") { Justification = Justify.Left };
+    AnsiConsole.Write(section);
+
+    try
+    {
+        var copilotLogDir = Path.Combine(userProfile, ".copilot", "logs");
+        if (!Directory.Exists(copilotLogDir))
+        {
+            AnsiConsole.MarkupLine("[dim]  No copilot logs directory found[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // Find the most recent log files (last 5)
+        var logFiles = new DirectoryInfo(copilotLogDir)
+            .GetFiles("*.log")
+            .OrderByDescending(f => f.LastWriteTime)
+            .Take(5)
+            .ToList();
+
+        if (!logFiles.Any())
+        {
+            AnsiConsole.MarkupLine("[dim]  No log files found[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // Aggregate stats
+        var modelStats = new Dictionary<string, (int calls, long promptTokens, long completionTokens, long cachedTokens, double totalCost)>();
+        int premiumRequests = 0;
+        long totalPromptTokens = 0;
+        long totalCompletionTokens = 0;
+        long totalCachedTokens = 0;
+        double totalCost = 0;
+
+        foreach (var logFile in logFiles)
+        {
+            try
+            {
+                using var fs = new FileStream(logFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(fs);
+                string? line;
+                
+                while ((line = reader.ReadLine()) != null)
+                {
+                    // Parse assistant_usage events
+                    if (line.Contains("\"kind\": \"assistant_usage\""))
+                    {
+                        // Read the next ~30 lines to get the full JSON object
+                        var jsonLines = new List<string> { line };
+                        for (int i = 0; i < 30; i++)
+                        {
+                            var nextLine = reader.ReadLine();
+                            if (nextLine == null) break;
+                            jsonLines.Add(nextLine);
+                            if (nextLine.Trim() == "},") break;
+                        }
+                        
+                        var jsonText = string.Join("\n", jsonLines);
+                        
+                        // Extract model name
+                        var modelMatch = Regex.Match(jsonText, "\"model\":\\s*\"([^\"]+)\"");
+                        var model = modelMatch.Success ? modelMatch.Groups[1].Value : "unknown";
+                        
+                        // Check if premium (opus models)
+                        if (model.Contains("opus"))
+                        {
+                            premiumRequests++;
+                        }
+                        
+                        // Extract metrics
+                        var inputTokensMatch = Regex.Match(jsonText, "\"input_tokens\":\\s*(\\d+)");
+                        var outputTokensMatch = Regex.Match(jsonText, "\"output_tokens\":\\s*(\\d+)");
+                        var cacheReadMatch = Regex.Match(jsonText, "\"cache_read_tokens\":\\s*(\\d+)");
+                        var costMatch = Regex.Match(jsonText, "\"cost\":\\s*([\\d.]+)");
+                        
+                        var inputTokens = inputTokensMatch.Success ? long.Parse(inputTokensMatch.Groups[1].Value) : 0;
+                        var outputTokens = outputTokensMatch.Success ? long.Parse(outputTokensMatch.Groups[1].Value) : 0;
+                        var cacheRead = cacheReadMatch.Success ? long.Parse(cacheReadMatch.Groups[1].Value) : 0;
+                        var cost = costMatch.Success ? double.Parse(costMatch.Groups[1].Value) : 0;
+                        
+                        totalPromptTokens += inputTokens;
+                        totalCompletionTokens += outputTokens;
+                        totalCachedTokens += cacheRead;
+                        totalCost += cost;
+                        
+                        // Aggregate by model
+                        if (!modelStats.ContainsKey(model))
+                        {
+                            modelStats[model] = (0, 0, 0, 0, 0);
+                        }
+                        var stats = modelStats[model];
+                        modelStats[model] = (
+                            stats.calls + 1,
+                            stats.promptTokens + inputTokens,
+                            stats.completionTokens + outputTokens,
+                            stats.cachedTokens + cacheRead,
+                            stats.totalCost + cost
+                        );
+                    }
+                }
+            }
+            catch
+            {
+                // Skip files that can't be read
+            }
+        }
+
+        if (modelStats.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[dim]  No usage data found in recent logs[/]");
+            AnsiConsole.WriteLine();
+            return;
+        }
+
+        // Build summary table
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .BorderColor(Color.Grey)
+            .AddColumn(new TableColumn("[dim]Model[/]").LeftAligned())
+            .AddColumn(new TableColumn("[dim]Calls[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Prompt[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Completion[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Cached[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Cache %[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Cost[/]").RightAligned());
+
+        foreach (var kvp in modelStats.OrderByDescending(x => x.Value.calls))
+        {
+            var model = kvp.Key;
+            var stats = kvp.Value;
+            
+            // Shorten model name for display
+            var displayModel = model
+                .Replace("claude-", "")
+                .Replace("gpt-", "");
+            if (displayModel.Length > 20)
+                displayModel = displayModel.Substring(0, 17) + "...";
+            
+            // Calculate cache hit percentage
+            var totalTokens = stats.promptTokens + stats.cachedTokens;
+            var cachePercent = totalTokens > 0 ? (double)stats.cachedTokens / totalTokens * 100 : 0;
+            var cacheColor = cachePercent > 50 ? "green" : cachePercent > 20 ? "yellow" : "dim";
+            
+            // Format token counts (K for thousands, M for millions)
+            var promptStr = FormatTokenCount(stats.promptTokens);
+            var completionStr = FormatTokenCount(stats.completionTokens);
+            var cachedStr = FormatTokenCount(stats.cachedTokens);
+            
+            // Cost color: green for low, yellow for medium, red for high
+            var costColor = stats.totalCost < 5 ? "green" : stats.totalCost < 20 ? "yellow" : "red";
+            
+            table.AddRow(
+                $"[cyan]{Markup.Escape(displayModel)}[/]",
+                $"[white]{stats.calls}[/]",
+                $"[blue]{promptStr}[/]",
+                $"[green]{completionStr}[/]",
+                $"[yellow]{cachedStr}[/]",
+                $"[{cacheColor}]{cachePercent:F0}%[/]",
+                $"[{costColor}]${stats.totalCost:F2}[/]"
+            );
+        }
+
+        AnsiConsole.Write(table);
+        
+        // Add summary line
+        var totalCachePercent = (totalPromptTokens + totalCachedTokens) > 0 
+            ? (double)totalCachedTokens / (totalPromptTokens + totalCachedTokens) * 100 
+            : 0;
+        var totalCalls = modelStats.Values.Sum(s => s.calls);
+        
+        AnsiConsole.MarkupLine($"  [dim]Total:[/] {totalCalls} calls  |  " +
+                            $"Prompt: [blue]{FormatTokenCount(totalPromptTokens)}[/]  |  " +
+                            $"Completion: [green]{FormatTokenCount(totalCompletionTokens)}[/]  |  " +
+                            $"Cached: [yellow]{FormatTokenCount(totalCachedTokens)}[/] ([cyan]{totalCachePercent:F0}%[/])  |  " +
+                            $"Premium: [magenta]{premiumRequests}[/]  |  " +
+                            $"Cost: [white]${totalCost:F2}[/]");
+    }
+    catch (Exception ex)
+    {
+        AnsiConsole.MarkupLine($"[red]  Error reading token stats: {Markup.Escape(ex.Message)}[/]");
     }
 
     AnsiConsole.WriteLine();
