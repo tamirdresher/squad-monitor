@@ -100,6 +100,9 @@ else
                     }
                 }
 
+                // Clear the console before each render to prevent stacking
+                AnsiConsole.Clear();
+
                 var now = DateTime.Now;
                 var content = orchestrationOnlyMode 
                     ? BuildOrchestrationOnlyContent(now, userProfile, teamRoot)
@@ -107,8 +110,6 @@ else
                 layout.Update(content);
                 ctx.Refresh();
 
-                var viewMode = orchestrationOnlyMode ? "[yellow]Orchestration View[/]" : "[cyan]Full Dashboard[/]";
-                AnsiConsole.MarkupLine($"\n[dim]Mode: {viewMode} | Press 'o' to toggle | Refreshing in {interval}s... (Ctrl+C to exit)[/]");
                 await Task.Delay(TimeSpan.FromSeconds(interval));
 
             } while (true);
@@ -1136,7 +1137,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         {
             var agencySessions = new DirectoryInfo(agencyLogDir)
                 .GetDirectories()
-                .Where(d => (now - d.LastWriteTime).TotalMinutes <= 30)
+                .Where(d => (now - d.LastWriteTime).TotalHours <= 4)
                 .ToList();
 
             foreach (var sessionDir in agencySessions)
@@ -1165,6 +1166,16 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                 {
                     var entries = ExtractFeedEntriesFromEvents(eventsFile, sessionName);
                     allFeedEntries.AddRange(entries);
+
+                    // Fallback: if events.jsonl yielded nothing, try process logs
+                    if (entries.Count == 0)
+                    {
+                        foreach (var logFile in logFiles.Where(f => f.Name.StartsWith("process-")))
+                        {
+                            var logEntries = ExtractFeedEntriesFromLog(logFile.FullName, sessionName);
+                            allFeedEntries.AddRange(logEntries);
+                        }
+                    }
                 }
                 else
                 {
@@ -1183,7 +1194,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         {
             var copilotLogs = new DirectoryInfo(copilotLogDir)
                 .GetFiles("copilot-*.log")
-                .Where(f => f.Length > 0 && (now - f.LastWriteTime).TotalMinutes <= 30)
+                .Where(f => f.Length > 0 && (now - f.LastWriteTime).TotalHours <= 4)
                 .ToList();
 
             foreach (var logFile in copilotLogs)
