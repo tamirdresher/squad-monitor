@@ -39,6 +39,12 @@ To update:
 dotnet tool update -g squad-monitor
 ```
 
+To uninstall:
+
+```bash
+dotnet tool uninstall -g squad-monitor
+```
+
 #### Option 2: Build from Source
 
 ```bash
