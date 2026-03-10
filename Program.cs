@@ -64,6 +64,10 @@ if (runOnce)
     DisplayRalphHeartbeat(userProfile);
     DisplayRalphLog(userProfile);
     
+    // Token Usage & Cost Stats
+    var tokenStats = BuildTokenStatsSection(userProfile);
+    AnsiConsole.Write(tokenStats);
+    
     // Only display GitHub sections if not disabled
     if (!disableGitHub)
     {
@@ -143,6 +147,9 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
 
     // Live Agent Activity (tails agency/copilot logs) — top priority visibility
     sections.Add(BuildLiveAgentFeedSection(userProfile));
+
+    // Token Usage & Cost Stats
+    sections.Add(BuildTokenStatsSection(userProfile));
 
     // Ralph Watch Heartbeat
     sections.Add(BuildRalphHeartbeatSection(userProfile));
@@ -520,6 +527,10 @@ static IRenderable BuildTokenStatsSection(string userProfile)
         long totalCachedTokens = 0;
         double totalCost = 0;
 
+        // Context window tracking from session_usage_info (keep latest per session)
+        long latestTokenLimit = 0;
+        long latestCurrentTokens = 0;
+
         foreach (var logFile in logFiles)
         {
             try
@@ -530,60 +541,75 @@ static IRenderable BuildTokenStatsSection(string userProfile)
                 
                 while ((line = reader.ReadLine()) != null)
                 {
-                    // Parse assistant_usage events
-                    if (line.Contains("\"kind\": \"assistant_usage\""))
+                    // Parse cli.model_call events — flat JSON with direct token fields
+                    if (line.Contains("[Telemetry] cli.model_call:"))
                     {
-                        // Read the next ~30 lines to get the full JSON object
-                        var jsonLines = new List<string> { line };
-                        for (int i = 0; i < 30; i++)
+                        // Read the JSON block that follows (fields are top-level, ~10 lines to key data)
+                        var jsonLines = new List<string>();
+                        for (int j = 0; j < 15; j++)
                         {
                             var nextLine = reader.ReadLine();
                             if (nextLine == null) break;
                             jsonLines.Add(nextLine);
-                            if (nextLine.Trim() == "},") break;
                         }
                         
                         var jsonText = string.Join("\n", jsonLines);
                         
-                        // Extract model name
                         var modelMatch = Regex.Match(jsonText, "\"model\":\\s*\"([^\"]+)\"");
                         var model = modelMatch.Success ? modelMatch.Groups[1].Value : "unknown";
                         
-                        // Check if premium (opus models)
                         if (model.Contains("opus"))
-                        {
                             premiumRequests++;
-                        }
                         
-                        // Extract metrics
-                        var inputTokensMatch = Regex.Match(jsonText, "\"input_tokens\":\\s*(\\d+)");
-                        var outputTokensMatch = Regex.Match(jsonText, "\"output_tokens\":\\s*(\\d+)");
-                        var cacheReadMatch = Regex.Match(jsonText, "\"cache_read_tokens\":\\s*(\\d+)");
-                        var costMatch = Regex.Match(jsonText, "\"cost\":\\s*([\\d.]+)");
+                        var promptMatch = Regex.Match(jsonText, "\"prompt_tokens_count\":\\s*(\\d+)");
+                        var completionMatch = Regex.Match(jsonText, "\"completion_tokens_count\":\\s*(\\d+)");
+                        var cachedMatch = Regex.Match(jsonText, "\"cached_tokens_count\":\\s*(\\d+)");
+                        var durationMatch = Regex.Match(jsonText, "\"duration_ms\":\\s*(\\d+)");
                         
-                        var inputTokens = inputTokensMatch.Success ? long.Parse(inputTokensMatch.Groups[1].Value) : 0;
-                        var outputTokens = outputTokensMatch.Success ? long.Parse(outputTokensMatch.Groups[1].Value) : 0;
-                        var cacheRead = cacheReadMatch.Success ? long.Parse(cacheReadMatch.Groups[1].Value) : 0;
-                        var cost = costMatch.Success ? double.Parse(costMatch.Groups[1].Value) : 0;
+                        var promptTokens = promptMatch.Success ? long.Parse(promptMatch.Groups[1].Value) : 0;
+                        var completionTokens = completionMatch.Success ? long.Parse(completionMatch.Groups[1].Value) : 0;
+                        var cachedTokens = cachedMatch.Success ? long.Parse(cachedMatch.Groups[1].Value) : 0;
                         
-                        totalPromptTokens += inputTokens;
-                        totalCompletionTokens += outputTokens;
-                        totalCachedTokens += cacheRead;
+                        // Estimate cost using standard per-token pricing ($/1M tokens)
+                        var cost = EstimateModelCost(model, promptTokens, completionTokens, cachedTokens);
+                        
+                        totalPromptTokens += promptTokens;
+                        totalCompletionTokens += completionTokens;
+                        totalCachedTokens += cachedTokens;
                         totalCost += cost;
                         
-                        // Aggregate by model
                         if (!modelStats.ContainsKey(model))
-                        {
                             modelStats[model] = (0, 0, 0, 0, 0);
-                        }
                         var stats = modelStats[model];
                         modelStats[model] = (
                             stats.calls + 1,
-                            stats.promptTokens + inputTokens,
-                            stats.completionTokens + outputTokens,
-                            stats.cachedTokens + cacheRead,
+                            stats.promptTokens + promptTokens,
+                            stats.completionTokens + completionTokens,
+                            stats.cachedTokens + cachedTokens,
                             stats.totalCost + cost
                         );
+                    }
+                    // Parse session_usage_info for context window stats
+                    else if (line.Contains("\"kind\": \"session_usage_info\""))
+                    {
+                        // Read ~15 lines to capture the metrics block (token_limit, current_tokens)
+                        var jsonLines = new List<string> { line };
+                        for (int j = 0; j < 15; j++)
+                        {
+                            var nextLine = reader.ReadLine();
+                            if (nextLine == null) break;
+                            jsonLines.Add(nextLine);
+                        }
+                        
+                        var jsonText = string.Join("\n", jsonLines);
+                        
+                        var tokenLimitMatch = Regex.Match(jsonText, "\"token_limit\":\\s*(\\d+)");
+                        var currentTokensMatch = Regex.Match(jsonText, "\"current_tokens\":\\s*(\\d+)");
+                        
+                        if (tokenLimitMatch.Success)
+                            latestTokenLimit = long.Parse(tokenLimitMatch.Groups[1].Value);
+                        if (currentTokensMatch.Success)
+                            latestCurrentTokens = long.Parse(currentTokensMatch.Groups[1].Value);
                     }
                 }
             }
@@ -624,17 +650,14 @@ static IRenderable BuildTokenStatsSection(string userProfile)
             if (displayModel.Length > 20)
                 displayModel = displayModel.Substring(0, 17) + "...";
             
-            // Calculate cache hit percentage
             var totalTokens = stats.promptTokens + stats.cachedTokens;
             var cachePercent = totalTokens > 0 ? (double)stats.cachedTokens / totalTokens * 100 : 0;
             var cacheColor = cachePercent > 50 ? "green" : cachePercent > 20 ? "yellow" : "dim";
             
-            // Format token counts (K for thousands, M for millions)
             var promptStr = FormatTokenCount(stats.promptTokens);
             var completionStr = FormatTokenCount(stats.completionTokens);
             var cachedStr = FormatTokenCount(stats.cachedTokens);
             
-            // Cost color: green for low, yellow for medium, red for high
             var costColor = stats.totalCost < 5 ? "green" : stats.totalCost < 20 ? "yellow" : "red";
             
             table.AddRow(
@@ -650,18 +673,31 @@ static IRenderable BuildTokenStatsSection(string userProfile)
 
         items.Add(table);
         
-        // Add summary line
+        // Summary line with totals
         var totalCachePercent = (totalPromptTokens + totalCachedTokens) > 0 
             ? (double)totalCachedTokens / (totalPromptTokens + totalCachedTokens) * 100 
             : 0;
         var totalCalls = modelStats.Values.Sum(s => s.calls);
         
-        items.Add(new Markup($"  [dim]Total:[/] {totalCalls} calls  |  " +
-                            $"Prompt: [blue]{FormatTokenCount(totalPromptTokens)}[/]  |  " +
-                            $"Completion: [green]{FormatTokenCount(totalCompletionTokens)}[/]  |  " +
-                            $"Cached: [yellow]{FormatTokenCount(totalCachedTokens)}[/] ([cyan]{totalCachePercent:F0}%[/])  |  " +
-                            $"Premium: [magenta]{premiumRequests}[/]  |  " +
-                            $"Cost: [white]${totalCost:F2}[/]"));
+        var summaryParts = new List<string>
+        {
+            $"[dim]Total:[/] {totalCalls} calls",
+            $"Prompt: [blue]{FormatTokenCount(totalPromptTokens)}[/]",
+            $"Completion: [green]{FormatTokenCount(totalCompletionTokens)}[/]",
+            $"Cached: [yellow]{FormatTokenCount(totalCachedTokens)}[/] ([cyan]{totalCachePercent:F0}%[/])",
+            $"Premium: [magenta]{premiumRequests}[/]",
+            $"Cost: [white]${totalCost:F2}[/]"
+        };
+
+        // Context window usage from session_usage_info
+        if (latestTokenLimit > 0)
+        {
+            var ctxPercent = (double)latestCurrentTokens / latestTokenLimit * 100;
+            var ctxColor = ctxPercent > 80 ? "red" : ctxPercent > 50 ? "yellow" : "green";
+            summaryParts.Add($"Context: [{ctxColor}]{ctxPercent:F1}%[/] [dim]({FormatTokenCount(latestCurrentTokens)}/{FormatTokenCount(latestTokenLimit)})[/]");
+        }
+
+        items.Add(new Markup("  " + string.Join("  |  ", summaryParts)));
     }
     catch (Exception ex)
     {
@@ -1145,10 +1181,13 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                 var logFiles = sessionDir.GetFiles("*.log").Where(f => f.Length > 0).ToList();
                 if (logFiles.Count == 0) continue;
 
-                var sessionName = DeriveSessionName(sessionDir.Name);
-                var sessionAge = now - sessionDir.LastWriteTime;
-                var lastWrite = sessionDir.LastWriteTime;
+                var sessionType = DeriveAgencySessionType(sessionDir);
+                var creationTime = ParseSessionCreationTime(sessionDir.Name) ?? sessionDir.CreationTime;
+                var sessionAge = now - creationTime;
+                var lastWrite = logFiles.Max(f => f.LastWriteTime);
                 var pidCount = CountProcessesInSession(logFiles);
+                var shortId = DeriveSessionName(sessionDir.Name);
+                var sessionName = $"{sessionType}-{shortId}";
 
                 activeSessions.Add(new SessionInfo
                 {
@@ -1157,7 +1196,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                     Age = sessionAge,
                     LastWrite = lastWrite,
                     ProcessCount = pidCount,
-                    Type = "Agency"
+                    Type = sessionType
                 });
 
                 // Prefer events.jsonl for structured data; fall back to process logs
@@ -1188,19 +1227,20 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
             }
         }
 
-        // Scan Copilot CLI sessions (~/.copilot/logs)
+        // Scan Copilot CLI sessions (~/.copilot/logs — process-*.log files)
         var copilotLogDir = Path.Combine(userProfile, ".copilot", "logs");
         if (Directory.Exists(copilotLogDir))
         {
             var copilotLogs = new DirectoryInfo(copilotLogDir)
-                .GetFiles("copilot-*.log")
+                .GetFiles("process-*.log")
                 .Where(f => f.Length > 0 && (now - f.LastWriteTime).TotalHours <= 4)
                 .ToList();
 
             foreach (var logFile in copilotLogs)
             {
-                var sessionName = DeriveSessionName(logFile.Name.Replace(".log", ""));
-                var sessionAge = now - logFile.LastWriteTime;
+                var pid = ExtractPidFromProcessLog(logFile.Name);
+                var sessionName = $"CLI-{pid}";
+                var sessionAge = now - logFile.CreationTime;
 
                 activeSessions.Add(new SessionInfo
                 {
@@ -1243,7 +1283,14 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
             {
                 var ageStr = FormatAge(session.Age);
                 var lastWriteStr = FormatAge(now - session.LastWrite);
-                var typeColor = session.Type == "Agency" ? "cyan" : "yellow";
+                var typeColor = session.Type switch
+                {
+                    "Ralph" => "cyan",
+                    "CLI" => "yellow",
+                    "Interactive" => "green",
+                    "Update" => "magenta",
+                    _ => "dim"
+                };
 
                 sessionTable.AddRow(
                     $"[white]{Markup.Escape(session.Name)}[/]",
@@ -1315,6 +1362,81 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
 }
 
 // ─── Helper Methods for Multi-Session View ─────────────────────
+
+static string DeriveAgencySessionType(DirectoryInfo sessionDir)
+{
+    // Check chat.json for Ralph indicators
+    var chatJsonPath = Path.Combine(sessionDir.FullName, "chat.json");
+    if (File.Exists(chatJsonPath))
+    {
+        try
+        {
+            using var fs = new FileStream(chatJsonPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            // Read first 8KB to check for Ralph/squad patterns
+            var buffer = new byte[Math.Min(8192, fs.Length)];
+            var bytesRead = fs.Read(buffer, 0, buffer.Length);
+            var sample = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
+
+            if (sample.Contains("ralph", StringComparison.OrdinalIgnoreCase))
+                return "Ralph";
+        }
+        catch { }
+    }
+
+    // Check for Ralph indicators in the main process log (first few KB)
+    var mainLog = sessionDir.GetFiles("process-*.log")
+        .OrderByDescending(f => f.Length)
+        .FirstOrDefault();
+    if (mainLog != null)
+    {
+        try
+        {
+            using var fs = new FileStream(mainLog.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            var buffer = new byte[Math.Min(8192, fs.Length)];
+            var bytesRead = fs.Read(buffer, 0, buffer.Length);
+            var sample = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
+
+            if (sample.Contains("ralph", StringComparison.OrdinalIgnoreCase))
+                return "Ralph";
+        }
+        catch { }
+    }
+
+    // Check for update-only sessions (agency_update_*.log files present)
+    var hasUpdateLogs = sessionDir.GetFiles("agency_update_*.log").Length > 0;
+    var hasCopilotLogs = sessionDir.GetFiles("agency_copilot_*.log").Length > 0;
+    if (hasUpdateLogs && !hasCopilotLogs)
+        return "Update";
+
+    // Sessions with many sub-agent logs are likely Ralph orchestrated
+    if (hasCopilotLogs && sessionDir.GetFiles("agency_copilot_*.log").Length >= 5)
+        return "Ralph";
+
+    return "Interactive";
+}
+
+static DateTime? ParseSessionCreationTime(string sessionDirName)
+{
+    // Parse "session_YYYYMMDD_HHMMSS_NNNNN" → DateTime
+    var match = Regex.Match(sessionDirName, @"^session_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_\d+$");
+    if (!match.Success) return null;
+
+    try
+    {
+        return new DateTime(
+            int.Parse(match.Groups[1].Value), int.Parse(match.Groups[2].Value), int.Parse(match.Groups[3].Value),
+            int.Parse(match.Groups[4].Value), int.Parse(match.Groups[5].Value), int.Parse(match.Groups[6].Value),
+            DateTimeKind.Local);
+    }
+    catch { return null; }
+}
+
+static string ExtractPidFromProcessLog(string fileName)
+{
+    // "process-1772902488521-76232.log" → "76232"
+    var match = Regex.Match(fileName, @"process-\d+-(\d+)\.log$");
+    return match.Success ? match.Groups[1].Value : fileName.Replace(".log", "");
+}
 
 static string DeriveSessionName(string dirOrFileName)
 {
