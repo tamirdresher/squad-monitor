@@ -934,6 +934,9 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                 var toolName = fnMatch.Groups[1].Value;
                 if (toolName == "report_intent" || toolName == "stop_powershell" || toolName.Length > 50) continue;
                 
+                // Only process if the next line has "arguments" (not "parameters" which is schema)
+                if (i + 1 >= lines.Length || !lines[i + 1].Contains("\"arguments\":")) continue;
+                
                 // Look at next line for arguments with description/command/intent
                 var detail = "";
                 if (i + 1 < lines.Length && lines[i + 1].Contains("\"arguments\":"))
@@ -982,7 +985,8 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                 };
                 var displayText = string.IsNullOrEmpty(detail) ? toolName : $"{toolName} → {detail}";
                 if (displayText.Length > 95) displayText = displayText.Substring(0, 92) + "...";
-                feedEntries.Add((time, icon, displayText));
+                if (time != "??:??:??") // Only show entries with valid timestamps
+                    feedEntries.Add((time, icon, displayText));
             }
             // Agent completion system notifications
             else if (trimmed.Contains("System notification: Agent"))
