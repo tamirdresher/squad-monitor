@@ -143,6 +143,9 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
 
     // Live Agent Activity (tails agency/copilot logs) — top priority visibility
     sections.Add(BuildLiveAgentFeedSection(userProfile));
+    
+    // Token Usage & Cost Stats
+    sections.Add(BuildTokenStatsSection(userProfile));
 
     // Ralph Watch Heartbeat
     sections.Add(BuildRalphHeartbeatSection(userProfile));
