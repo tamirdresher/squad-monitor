@@ -1,12 +1,15 @@
 name: Publish to NuGet
 
+# Triggers:
+#   - Release published (covers new releases and drafts->published)
+#   - Manual dispatch with explicit version input
 on:
   release:
     types: [published]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g., 1.0.0)'
+        description: 'Version to publish (e.g., 1.2.0)'
         required: true
         type: string
 
@@ -33,6 +36,7 @@ jobs:
     - name: Build
       run: dotnet build squad-monitor.csproj --configuration Release --no-restore
 
+    # Derive package version from the release tag or manual input
     - name: Determine version
       run: |
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -55,6 +59,7 @@ jobs:
     - name: Publish to NuGet
       run: dotnet nuget push nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
 
+    # Attach the .nupkg to the GitHub Release for direct download
     - name: Attach package to GitHub Release
       if: github.event_name == 'release'
       uses: softprops/action-gh-release@v2
