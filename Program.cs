@@ -1541,7 +1541,9 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
             var sessionTable = new Table()
                 .BorderColor(Color.Grey)
                 .Border(TableBorder.Simple)
-                .AddColumn(new TableColumn("Session").Width(45))
+                .AddColumn(new TableColumn("Session").Width(25))
+                .AddColumn(new TableColumn("CWD").Width(20))
+                .AddColumn(new TableColumn("Resume ID").Width(10))
                 .AddColumn(new TableColumn("Agents").Width(7))
                 .AddColumn(new TableColumn("MCPs").Width(6))
                 .AddColumn(new TableColumn("Age").Width(10))
@@ -1564,6 +1566,8 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
 
                 sessionTable.AddRow(
                     $"[white]{Markup.Escape(session.Name)}[/]",
+                    $"[yellow]{Markup.Escape(session.Cwd)}[/]",
+                    $"[cyan]{Markup.Escape(session.ResumeId)}[/]",
                     $"[dim]{session.ProcessCount}[/]",
                     $"[dim]{session.McpCount}[/]",
                     $"[dim]{ageStr}[/]",
@@ -1711,18 +1715,13 @@ static string ExtractPidFromProcessLog(string fileName)
 
 static string DeriveSessionName(string dirOrFileName, DateTime? creationTime = null, string cwd = "", string resumeId = "")
 {
-    // Extract meaningful session identifier with date, CWD/repo, and resume ID
-    // Example: "Mar 11 20:39 (58236) | tamresearch1 | 9m ago | Agency"
-    // Simplified for table display: "Mar 11 20:39 | tamresearch1" (time in separate column)
+    // Extract meaningful session identifier with date/time
+    // CWD and Resume ID are now shown in separate table columns
     
     if (dirOrFileName.StartsWith("copilot-"))
     {
         var id = dirOrFileName.Replace("copilot-", "");
         var shortId = id.Substring(0, Math.Min(8, id.Length));
-        
-        // Include CWD if available
-        if (!string.IsNullOrEmpty(cwd))
-            return $"{shortId} | {cwd}";
         return shortId;
     }
 
@@ -1733,26 +1732,12 @@ static string DeriveSessionName(string dirOrFileName, DateTime? creationTime = n
         {
             var shortId = parts[3].Substring(0, Math.Min(5, parts[3].Length));
             var timeStr = creationTime.Value.ToString("MMM dd HH:mm");
-            
-            // Build display name with optional parts
-            var nameParts = new List<string> { timeStr };
-            
-            if (!string.IsNullOrEmpty(resumeId))
-                nameParts.Add($"({resumeId})");
-            
-            if (!string.IsNullOrEmpty(cwd))
-                nameParts.Add(cwd);
-            else
-                nameParts.Add($"({shortId})");  // Fallback to short ID if no CWD
-            
-            return string.Join(" | ", nameParts);
+            return $"{timeStr} ({shortId})";
         }
         else if (parts.Length >= 4)
         {
             // Fallback if no creationTime provided
             var shortId = parts[3].Substring(0, Math.Min(5, parts[3].Length));
-            if (!string.IsNullOrEmpty(cwd))
-                return $"{parts[2].Substring(4)} | {cwd}";
             return $"{parts[2].Substring(4)}_{shortId}";
         }
     }
