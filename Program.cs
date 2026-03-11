@@ -1,5 +1,6 @@
 using Spectre.Console;
 using Spectre.Console.Rendering;
+using SquadMonitor;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -9,6 +10,7 @@ var interval = 5;
 var runOnce = false;
 var orchestrationOnlyMode = false;
 var disableGitHub = false;
+var useSharpUI = false;
 var teamRoot = FindTeamRoot();
 var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
@@ -27,6 +29,17 @@ for (int i = 0; i < args.Length; i++)
     {
         disableGitHub = true;
     }
+    else if (args[i] == "--sharp-ui" || args[i] == "--beta")
+    {
+        useSharpUI = true;
+    }
+}
+
+// If SharpConsoleUI mode is enabled, run the new TUI
+if (useSharpUI)
+{
+    await SharpUI.RunAsync(teamRoot, interval);
+    return 0;
 }
 
 if (teamRoot == null)
@@ -48,6 +61,7 @@ if (disableGitHub)
     AnsiConsole.MarkupLine($"[dim]GitHub integration: disabled (gh CLI not available)[/]");
 }
 AnsiConsole.MarkupLine($"[dim]Press 'o' or 'O' to toggle orchestration-only view[/]");
+AnsiConsole.MarkupLine($"[dim]Use --sharp-ui or --beta to try the new SharpConsoleUI interface[/]");
 AnsiConsole.WriteLine();
 
 if (runOnce)
