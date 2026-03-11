@@ -39,6 +39,12 @@ To update:
 dotnet tool update -g squad-monitor
 ```
 
+To uninstall:
+
+```bash
+dotnet tool uninstall -g squad-monitor
+```
+
 #### Option 2: Build from Source
 
 ```bash
@@ -61,6 +67,7 @@ When running `squad-monitor` (either as a global tool or via `dotnet run`):
 |------|-------------|
 | `--interval N` | Refresh every N seconds (default: 5) |
 | `--once` | Render once and exit (good for CI/scripts) |
+| `--no-github` | Skip GitHub API calls (useful offline or without `gh` auth) |
 
 ## How It Works
 
