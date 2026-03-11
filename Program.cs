@@ -1621,7 +1621,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "🤖",
+                        Icon = "A",
                         Text = $"Spawned {agentName}",
                         SessionName = sessionName
                     });
@@ -1632,7 +1632,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "✅",
+                        Icon = "[ok]",
                         Text = "Sub-agent completed",
                         SessionName = sessionName
                     });
@@ -1644,7 +1644,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "💭",
+                        Icon = "T",
                         Text = $"Turn {turnId} started",
                         SessionName = sessionName
                     });
@@ -1655,7 +1655,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "🏁",
+                        Icon = "*",
                         Text = "Task completed",
                         SessionName = sessionName
                     });
@@ -1709,7 +1709,7 @@ static List<FeedEntry> ExtractFeedEntriesFromLog(string logPath, string sessionN
                     {
                         Time = dt.ToLocalTime().ToString("HH:mm:ss"),
                         TimeValue = dt.ToLocalTime(),
-                        Icon = "📋",
+                        Icon = "L",
                         Text = $"Result: {resultText}",
                         SessionName = sessionName
                     });
@@ -1770,21 +1770,21 @@ static string GetToolIcon(string toolName)
 {
     return toolName switch
     {
-        "powershell" => "⚡",
-        "edit" => "✏️",
-        "create" => "📄",
-        "view" => "👁️",
-        "grep" => "🔍",
-        "glob" => "🔍",
-        "task" => "🤖",
-        "task_complete" => "🏁",
-        _ when toolName.StartsWith("github-mcp") => "🔗",
-        _ when toolName.StartsWith("azure-devops") => "🔗",
-        _ when toolName.StartsWith("playwright") => "🌐",
-        _ when toolName.StartsWith("workiq") => "📧",
-        _ when toolName.StartsWith("enghub") => "📚",
-        _ when toolName.Contains("search") => "🔍",
-        _ => "🔧"
+        "powershell" => ">",
+        "edit" => "E",
+        "create" => "+",
+        "view" => "V",
+        "grep" => "?",
+        "glob" => "?",
+        "task" => "A",
+        "task_complete" => "*",
+        _ when toolName.StartsWith("github-mcp") => "@",
+        _ when toolName.StartsWith("azure-devops") => "@",
+        _ when toolName.StartsWith("playwright") => "W",
+        _ when toolName.StartsWith("workiq") => "M",
+        _ when toolName.StartsWith("enghub") => "D",
+        _ when toolName.Contains("search") => "?",
+        _ => "."
     };
 }
 
