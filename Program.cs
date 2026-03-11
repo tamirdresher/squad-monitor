@@ -89,6 +89,7 @@ if (runOnce)
 
     if (multiSessionMode)
     {
+        // Multi-session only mode
         var multiSessionContent = BuildMultiSessionContent(now, userProfile, sessionWindowMinutes);
         AnsiConsole.Write(multiSessionContent);
     }
@@ -250,6 +251,7 @@ static IRenderable BuildMultiSessionContent(DateTime now, string userProfile, in
 {
     var sections = new List<IRenderable>();
 
+    // Header
     var header = new Rule($"[green bold]Squad Monitor v2 — Multi-Session View[/] [dim]— {now:yyyy-MM-dd HH:mm:ss} — window: {sessionWindowMinutes}m[/]")
     {
         Justification = Justify.Left
@@ -579,17 +581,24 @@ static IRenderable BuildTokenStatsSection(string userProfile)
             return new Rows(items);
         }
 
-        // Aggregate model stats from assistant_usage events
-        var modelStats = new Dictionary<string, (int calls, long promptTokens, long completionTokens, long cachedTokens, double totalCost)>();
+        // Aggregate model stats from assistant_usage and cli.model_call events
+        var modelStats = new Dictionary<string, ModelCallStats>();
         int premiumRequests = 0;
         long totalPromptTokens = 0;
         long totalCompletionTokens = 0;
         long totalCachedTokens = 0;
         double totalCost = 0;
 
+        // Track per-session costs
+        var sessionCosts = new Dictionary<string, double>();
+
         // Track context window from session_usage_info (keep latest per session)
         long latestTokenLimit = 0;
         long latestCurrentTokens = 0;
+
+        // Track which api_ids we've already counted (assistant_usage and cli.model_call
+        // can report the same call — deduplicate via api_id)
+        var seenApiIds = new HashSet<string>();
 
         foreach (var logFile in logFiles)
         {
@@ -605,6 +614,10 @@ static IRenderable BuildTokenStatsSection(string userProfile)
                     {
                         var jsonText = ReadAheadBlock(reader, line);
 
+                        var apiId = ExtractString(jsonText, "\"api_call_id\":\\s*\"([^\"]+)\"");
+                        if (apiId != null && !seenApiIds.Add(apiId))
+                            continue; // already counted from cli.model_call
+
                         var modelMatch = Regex.Match(jsonText, "\"model\":\\s*\"([^\"]+)\"");
                         var model = modelMatch.Success ? modelMatch.Groups[1].Value : "unknown";
 
@@ -615,6 +628,8 @@ static IRenderable BuildTokenStatsSection(string userProfile)
                         var outputTokens = ExtractLong(jsonText, "\"output_tokens\":\\s*(\\d+)");
                         var cacheRead = ExtractLong(jsonText, "\"cache_read_tokens\":\\s*(\\d+)");
                         var cost = ExtractDouble(jsonText, "\"cost\":\\s*([\\d.]+)");
+                        var durationMs = ExtractLong(jsonText, "\"duration\":\\s*(\\d+)");
+                        var sessionId = ExtractString(jsonText, "\"session_id\":\\s*\"([^\"]+)\"");
 
                         totalPromptTokens += inputTokens;
                         totalCompletionTokens += outputTokens;
@@ -622,11 +637,60 @@ static IRenderable BuildTokenStatsSection(string userProfile)
                         totalCost += cost;
 
                         if (!modelStats.ContainsKey(model))
-                            modelStats[model] = (0, 0, 0, 0, 0);
+                            modelStats[model] = new ModelCallStats();
                         var s = modelStats[model];
-                        modelStats[model] = (s.calls + 1, s.promptTokens + inputTokens,
-                            s.completionTokens + outputTokens, s.cachedTokens + cacheRead,
-                            s.totalCost + cost);
+                        s.Calls++;
+                        s.PromptTokens += inputTokens;
+                        s.CompletionTokens += outputTokens;
+                        s.CachedTokens += cacheRead;
+                        s.TotalCost += cost;
+                        if (durationMs > 0)
+                            s.DurationsMs.Add(durationMs);
+
+                        if (sessionId != null)
+                        {
+                            sessionCosts.TryGetValue(sessionId, out var sc);
+                            sessionCosts[sessionId] = sc + cost;
+                        }
+                    }
+                    else if (line.Contains("cli.model_call:"))
+                    {
+                        var jsonText = ReadAheadBlock(reader, line);
+
+                        var apiId = ExtractString(jsonText, "\"api_id\":\\s*\"([^\"]+)\"");
+                        if (apiId != null && !seenApiIds.Add(apiId))
+                            continue; // already counted from assistant_usage
+
+                        var modelMatch = Regex.Match(jsonText, "\"model\":\\s*\"([^\"]+)\"");
+                        var model = modelMatch.Success ? modelMatch.Groups[1].Value : "unknown";
+
+                        if (model.Contains("opus", StringComparison.OrdinalIgnoreCase))
+                            premiumRequests++;
+
+                        var inputTokens = ExtractLong(jsonText, "\"prompt_tokens_count\":\\s*(\\d+)");
+                        var outputTokens = ExtractLong(jsonText, "\"completion_tokens_count\":\\s*(\\d+)");
+                        var cacheRead = ExtractLong(jsonText, "\"cached_tokens_count\":\\s*(\\d+)");
+                        var durationMs = ExtractLong(jsonText, "\"duration_ms\":\\s*(\\d+)");
+                        var sessionId = ExtractString(jsonText, "\"session_id\":\\s*\"([^\"]+)\"");
+
+                        totalPromptTokens += inputTokens;
+                        totalCompletionTokens += outputTokens;
+                        totalCachedTokens += cacheRead;
+
+                        if (!modelStats.ContainsKey(model))
+                            modelStats[model] = new ModelCallStats();
+                        var s = modelStats[model];
+                        s.Calls++;
+                        s.PromptTokens += inputTokens;
+                        s.CompletionTokens += outputTokens;
+                        s.CachedTokens += cacheRead;
+                        if (durationMs > 0)
+                            s.DurationsMs.Add(durationMs);
+
+                        if (sessionId != null && sessionCosts.ContainsKey(sessionId))
+                        {
+                            // Cost already tracked via assistant_usage; don't double-count
+                        }
                     }
                     else if (line.Contains("\"kind\": \"session_usage_info\""))
                     {
@@ -666,30 +730,39 @@ static IRenderable BuildTokenStatsSection(string userProfile)
             .AddColumn(new TableColumn("[dim]Completion[/]").RightAligned())
             .AddColumn(new TableColumn("[dim]Cached[/]").RightAligned())
             .AddColumn(new TableColumn("[dim]Cache %[/]").RightAligned())
+            .AddColumn(new TableColumn("[dim]Avg Latency[/]").RightAligned())
             .AddColumn(new TableColumn("[dim]Cost[/]").RightAligned());
 
-        foreach (var kvp in modelStats.OrderByDescending(x => x.Value.calls))
+        foreach (var kvp in modelStats.OrderByDescending(x => x.Value.Calls))
         {
             var model = kvp.Key;
             var stats = kvp.Value;
 
             var displayModel = model.Replace("claude-", "").Replace("gpt-", "");
-            if (displayModel.Length > 20)
-                displayModel = displayModel.Substring(0, 17) + "...";
+            if (displayModel.Length > 22)
+                displayModel = displayModel.Substring(0, 19) + "...";
 
-            var totalTokens = stats.promptTokens + stats.cachedTokens;
-            var cachePercent = totalTokens > 0 ? (double)stats.cachedTokens / totalTokens * 100 : 0;
+            var totalTokens = stats.PromptTokens + stats.CachedTokens;
+            var cachePercent = totalTokens > 0 ? (double)stats.CachedTokens / totalTokens * 100 : 0;
             var cacheColor = cachePercent > 50 ? "green" : cachePercent > 20 ? "yellow" : "dim";
-            var costColor = stats.totalCost < 5 ? "green" : stats.totalCost < 20 ? "yellow" : "red";
+            var costColor = stats.TotalCost < 5 ? "green" : stats.TotalCost < 20 ? "yellow" : "red";
+
+            var avgLatency = stats.DurationsMs.Count > 0
+                ? $"{stats.DurationsMs.Average() / 1000.0:F1}s"
+                : "—";
+            var latencyColor = stats.DurationsMs.Count > 0 && stats.DurationsMs.Average() > 15000 ? "red"
+                : stats.DurationsMs.Count > 0 && stats.DurationsMs.Average() > 5000 ? "yellow"
+                : "green";
 
             table.AddRow(
                 $"[cyan]{Markup.Escape(displayModel)}[/]",
-                $"[white]{stats.calls}[/]",
-                $"[blue]{FormatTokenCount(stats.promptTokens)}[/]",
-                $"[green]{FormatTokenCount(stats.completionTokens)}[/]",
-                $"[yellow]{FormatTokenCount(stats.cachedTokens)}[/]",
+                $"[white]{stats.Calls}[/]",
+                $"[blue]{FormatTokenCount(stats.PromptTokens)}[/]",
+                $"[green]{FormatTokenCount(stats.CompletionTokens)}[/]",
+                $"[yellow]{FormatTokenCount(stats.CachedTokens)}[/]",
                 $"[{cacheColor}]{cachePercent:F0}%[/]",
-                $"[{costColor}]${stats.totalCost:F2}[/]"
+                $"[{latencyColor}]{avgLatency}[/]",
+                $"[{costColor}]${stats.TotalCost:F2}[/]"
             );
         }
 
@@ -699,7 +772,7 @@ static IRenderable BuildTokenStatsSection(string userProfile)
         var totalCachePercent = (totalPromptTokens + totalCachedTokens) > 0
             ? (double)totalCachedTokens / (totalPromptTokens + totalCachedTokens) * 100
             : 0;
-        var totalCalls = modelStats.Values.Sum(s => s.calls);
+        var totalCalls = modelStats.Values.Sum(s => s.Calls);
 
         var summaryParts = new List<string>
         {
@@ -710,6 +783,14 @@ static IRenderable BuildTokenStatsSection(string userProfile)
             $"Premium: [magenta]{premiumRequests}[/]",
             $"Cost: [white]${totalCost:F2}[/]"
         };
+
+        // Per-session cost breakdown
+        if (sessionCosts.Count > 0)
+        {
+            var avgSessionCost = sessionCosts.Values.Average();
+            var maxSessionCost = sessionCosts.Values.Max();
+            summaryParts.Add($"Sessions: [white]{sessionCosts.Count}[/] [dim](avg ${avgSessionCost:F2}, max ${maxSessionCost:F2})[/]");
+        }
 
         // Context window usage from session_usage_info
         if (latestTokenLimit > 0)
@@ -2453,4 +2534,14 @@ class FeedEntry
     public string Icon { get; set; } = "";
     public string Text { get; set; } = "";
     public string SessionName { get; set; } = "";
+}
+
+class ModelCallStats
+{
+    public int Calls { get; set; }
+    public long PromptTokens { get; set; }
+    public long CompletionTokens { get; set; }
+    public long CachedTokens { get; set; }
+    public double TotalCost { get; set; }
+    public List<long> DurationsMs { get; set; } = new();
 }
