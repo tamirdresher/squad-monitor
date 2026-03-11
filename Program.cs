@@ -708,6 +708,24 @@ static IRenderable BuildTokenStatsSection(string userProfile)
     return new Rows(items);
 }
 
+static double EstimateModelCost(string model, long promptTokens, long completionTokens, long cachedTokens)
+{
+    // Per-million-token pricing (approximate mid-2025 rates)
+    var (inputRate, outputRate, cachedRate) = model switch
+    {
+        _ when model.Contains("opus") => (15.0, 75.0, 1.5),
+        _ when model.Contains("sonnet") => (3.0, 15.0, 0.3),
+        _ when model.Contains("haiku") => (0.25, 1.25, 0.025),
+        _ when model.Contains("gpt-5") => (5.0, 15.0, 1.25),
+        _ when model.Contains("gpt-4") => (2.0, 8.0, 0.5),
+        _ when model.Contains("gemini") => (1.25, 10.0, 0.3),
+        _ => (3.0, 15.0, 0.3) // default to sonnet-tier
+    };
+
+    var nonCachedInput = Math.Max(0, promptTokens - cachedTokens);
+    return (nonCachedInput * inputRate + completionTokens * outputRate + cachedTokens * cachedRate) / 1_000_000.0;
+}
+
 static string FormatTokenCount(long count)
 {
     if (count >= 1_000_000)
@@ -1186,6 +1204,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                 var sessionAge = now - creationTime;
                 var lastWrite = logFiles.Max(f => f.LastWriteTime);
                 var pidCount = CountProcessesInSession(logFiles);
+                var sessionMcpCount = CountMcpServersInSession(logFiles);
                 var shortId = DeriveSessionName(sessionDir.Name);
                 var sessionName = $"{sessionType}-{shortId}";
 
@@ -1196,6 +1215,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                     Age = sessionAge,
                     LastWrite = lastWrite,
                     ProcessCount = pidCount,
+                    McpCount = sessionMcpCount,
                     Type = sessionType
                 });
 
@@ -1257,8 +1277,9 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
             }
         }
 
-        // Count MCP server processes (heuristic: look for mcp-server processes)
-        var mcpCount = CountMcpServers();
+        // Count MCP servers from session logs (faster than process scanning)
+        var mcpCount = activeSessions.Sum(s => s.McpCount);
+        if (mcpCount == 0) mcpCount = CountMcpServers(); // fallback to process scan
 
         // Display Overview Panel
         if (activeSessions.Count > 0)
@@ -1274,10 +1295,11 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                 .BorderColor(Color.Grey)
                 .Border(TableBorder.Simple)
                 .AddColumn(new TableColumn("Session").Width(35))
-                .AddColumn(new TableColumn("PIDs").Width(6))
-                .AddColumn(new TableColumn("Age").Width(8))
+                .AddColumn(new TableColumn("Agents").Width(7))
+                .AddColumn(new TableColumn("MCPs").Width(6))
+                .AddColumn(new TableColumn("Age").Width(10))
                 .AddColumn(new TableColumn("Last Write").Width(12))
-                .AddColumn(new TableColumn("Type").Width(8));
+                .AddColumn(new TableColumn("Type").Width(12));
 
             foreach (var session in activeSessions.OrderByDescending(s => s.LastWrite))
             {
@@ -1295,6 +1317,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                 sessionTable.AddRow(
                     $"[white]{Markup.Escape(session.Name)}[/]",
                     $"[dim]{session.ProcessCount}[/]",
+                    $"[dim]{session.McpCount}[/]",
                     $"[dim]{ageStr}[/]",
                     $"[green]{lastWriteStr}[/]",
                     $"[{typeColor}]{session.Type}[/]");
@@ -1313,13 +1336,13 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         // Merged Activity Feed
         if (allFeedEntries.Count > 0)
         {
-            // Sort chronologically and take last 20
+            // Sort chronologically and take last 30
             var recentEntries = allFeedEntries
                 .OrderBy(e => e.TimeValue)
-                .TakeLast(20)
+                .TakeLast(30)
                 .ToList();
 
-            items.Add(new Markup("[bold]Merged Activity Feed (last 20 entries):[/]"));
+            items.Add(new Markup("[bold]Merged Activity Feed (last 30 entries):[/]"));
             items.Add(Text.Empty);
 
             var activityTable = new Table()
@@ -1464,29 +1487,15 @@ static string DeriveSessionName(string dirOrFileName)
 
 static int CountProcessesInSession(List<FileInfo> logFiles)
 {
-    // Heuristic: count unique PID references in log files
-    var pidPattern = new Regex(@"pid[""':\s]+(\d+)", RegexOptions.IgnoreCase);
-    var pids = new HashSet<string>();
+    // Count unique copilot agent processes from log filenames (fast, no I/O)
+    var copilotCount = logFiles.Count(f => f.Name.StartsWith("agency_copilot_"));
+    var processCount = logFiles.Count(f => f.Name.StartsWith("process-"));
+    return Math.Max(1, copilotCount + processCount);
+}
 
-    foreach (var logFile in logFiles.Take(3)) // Check first 3 logs only for performance
-    {
-        try
-        {
-            var sampleSize = Math.Min(50000, logFile.Length);
-            using var fs = new FileStream(logFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            fs.Seek(-sampleSize, SeekOrigin.End);
-            using var reader = new StreamReader(fs);
-            var sample = reader.ReadToEnd();
-
-            foreach (Match match in pidPattern.Matches(sample))
-            {
-                pids.Add(match.Groups[1].Value);
-            }
-        }
-        catch { }
-    }
-
-    return Math.Max(1, pids.Count);
+static int CountMcpServersInSession(List<FileInfo> logFiles)
+{
+    return logFiles.Count(f => f.Name.StartsWith("agency_mcp_"));
 }
 
 static int CountMcpServers()
@@ -2351,6 +2360,7 @@ class SessionInfo
     public TimeSpan Age { get; set; }
     public DateTime LastWrite { get; set; }
     public int ProcessCount { get; set; }
+    public int McpCount { get; set; }
     public string Type { get; set; } = "";
 }
 
