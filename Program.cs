@@ -188,6 +188,11 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
     sections.Add(header);
     sections.Add(Text.Empty);
 
+    // Legend
+    var legend = new Text("── Legend ── ⚡ Shell  ✏️ Edit  👁️ View  📄 Create  🔍 Search  🤖 Agent  ✅ Done  💭 Turn  🏁 Complete  🔧 Tool", new Style(Color.Cyan3));
+    sections.Add(legend);
+    sections.Add(Text.Empty);
+
     // Live Agent Activity (tails agency/copilot logs) — top priority visibility
     sections.Add(BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes));
 
@@ -234,6 +239,11 @@ static IRenderable BuildOrchestrationOnlyContent(DateTime now, string userProfil
         Justification = Justify.Left
     };
     sections.Add(header);
+    sections.Add(Text.Empty);
+
+    // Legend
+    var legend = new Text("── Legend ── ⚡ Shell  ✏️ Edit  👁️ View  📄 Create  🔍 Search  🤖 Agent  ✅ Done  💭 Turn  🏁 Complete  🔧 Tool", new Style(Color.Cyan3));
+    sections.Add(legend);
     sections.Add(Text.Empty);
 
     // Load and display orchestration activities in detail
