@@ -856,15 +856,15 @@ static string? ExtractString(string text, string pattern)
     return m.Success ? m.Groups[1].Value : null;
 }
 
-static string ExtractCwdFromEventsFile(string eventsFilePath)
+static (string Cwd, string ResumeId, DateTime? StartTime) ExtractSessionMetadataFromEventsFile(string eventsFilePath)
 {
-    // Parse CWD from events.jsonl by reading first few KB
+    // Parse CWD, resume ID, and start time from events.jsonl by reading first few KB
     try
     {
-        if (!File.Exists(eventsFilePath)) return "";
+        if (!File.Exists(eventsFilePath)) return ("", "", null);
         
         var fileInfo = new FileInfo(eventsFilePath);
-        var bytesToRead = (int)Math.Min(8192, fileInfo.Length);
+        var bytesToRead = (int)Math.Min(16384, fileInfo.Length);
         var bytes = new byte[bytesToRead];
         
         using (var fs = new FileStream(eventsFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
@@ -874,7 +874,20 @@ static string ExtractCwdFromEventsFile(string eventsFilePath)
         
         var content = Encoding.UTF8.GetString(bytes);
         
-        // Try to extract cwd or working_directory from JSON
+        // Extract resume ID from session.start event: "sessionId":"..."
+        var resumeId = ExtractString(content, "\"sessionId\"\\s*:\\s*\"([a-f0-9-]+)\"") ?? "";
+        // Shorten the UUID to first 8 chars for display
+        if (resumeId.Length > 8) resumeId = resumeId.Substring(0, 8);
+        
+        // Extract start time from session.start timestamp
+        DateTime? startTime = null;
+        var timestampStr = ExtractString(content, "\"type\"\\s*:\\s*\"session\\.start\"[^}]*\"timestamp\"\\s*:\\s*\"([^\"]+)\"");
+        if (timestampStr != null && DateTime.TryParse(timestampStr, null, DateTimeStyles.RoundtripKind, out var ts))
+        {
+            startTime = ts.ToLocalTime();
+        }
+        
+        // Try to extract cwd from session.resume context
         var cwd = ExtractString(content, "\"cwd\"\\s*:\\s*\"([^\"]+)\"");
         if (cwd == null)
             cwd = ExtractString(content, "\"working_directory\"\\s*:\\s*\"([^\"]+)\"");
@@ -883,12 +896,18 @@ static string ExtractCwdFromEventsFile(string eventsFilePath)
         {
             // Extract just the last path segment (repo name)
             var lastSegment = cwd.TrimEnd('\\', '/').Split('\\', '/').LastOrDefault();
-            return lastSegment ?? "";
+            cwd = lastSegment ?? "";
         }
+        else
+        {
+            cwd = "";
+        }
+        
+        return (cwd, resumeId, startTime);
     }
     catch { }
     
-    return "";
+    return ("", "", null);
 }
 
 static string FormatTokenCount(long count)
@@ -1365,17 +1384,23 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
                 if (logFiles.Count == 0) continue;
 
                 var sessionType = DeriveAgencySessionType(sessionDir);
-                var creationTime = ParseSessionCreationTime(sessionDir.Name) ?? sessionDir.CreationTime;
+                
+                // Extract comprehensive metadata from events.jsonl
+                var eventsFile = Path.Combine(sessionDir.FullName, "events.jsonl");
+                var (cwd, resumeId, startTime) = File.Exists(eventsFile) 
+                    ? ExtractSessionMetadataFromEventsFile(eventsFile) 
+                    : ("", "", null);
+                
+                // Use events-based start time if available, otherwise fallback to dir name parsing
+                var creationTime = startTime ?? ParseSessionCreationTime(sessionDir.Name) ?? sessionDir.CreationTime;
                 var sessionAge = now - creationTime;
                 var lastWrite = logFiles.Max(f => f.LastWriteTime);
                 var pidCount = CountProcessesInSession(logFiles);
                 var sessionMcpCount = CountMcpServersInSession(logFiles);
-                var shortId = DeriveSessionName(sessionDir.Name, creationTime);
-                var sessionName = $"{sessionType}-{shortId}";
                 
-                // Extract CWD from events.jsonl if available
-                var eventsFile = Path.Combine(sessionDir.FullName, "events.jsonl");
-                var cwd = File.Exists(eventsFile) ? ExtractCwdFromEventsFile(eventsFile) : "";
+                // Generate session name with metadata
+                var shortId = DeriveSessionName(sessionDir.Name, creationTime, cwd, resumeId);
+                var sessionName = $"{sessionType}-{shortId}";
 
                 activeSessions.Add(new SessionInfo
                 {
@@ -1386,7 +1411,8 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
                     ProcessCount = pidCount,
                     McpCount = sessionMcpCount,
                     Type = sessionType,
-                    Cwd = cwd
+                    Cwd = cwd,
+                    ResumeId = resumeId
                 });
 
                 // Prefer events.jsonl for structured data; fall back to process logs
@@ -1458,13 +1484,16 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
                 var eventsFile = Path.Combine(sessionDir.FullName, "events.jsonl");
                 if (logFiles.Count == 0 && !File.Exists(eventsFile)) continue;
 
-                var shortId = DeriveSessionName(sessionDir.Name);
-                var sessionName = $"Copilot-{shortId}";
-                var sessionAge = now - sessionDir.CreationTime;
-                var lastWrite = logFiles.Count > 0 ? logFiles.Max(f => f.LastWriteTime) : sessionDir.LastWriteTime;
+                // Extract comprehensive metadata from events.jsonl
+                var (cwd, resumeId, startTime) = File.Exists(eventsFile) 
+                    ? ExtractSessionMetadataFromEventsFile(eventsFile) 
+                    : ("", "", null);
                 
-                // Extract CWD from events.jsonl if available
-                var cwd = File.Exists(eventsFile) ? ExtractCwdFromEventsFile(eventsFile) : "";
+                var creationTime = startTime ?? sessionDir.CreationTime;
+                var shortId = DeriveSessionName(sessionDir.Name, creationTime, cwd, resumeId);
+                var sessionName = $"Copilot-{shortId}";
+                var sessionAge = now - creationTime;
+                var lastWrite = logFiles.Count > 0 ? logFiles.Max(f => f.LastWriteTime) : sessionDir.LastWriteTime;
 
                 activeSessions.Add(new SessionInfo
                 {
@@ -1475,7 +1504,8 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
                     ProcessCount = logFiles.Count(f => f.Name.StartsWith("process-")),
                     McpCount = logFiles.Count(f => f.Name.Contains("mcp")),
                     Type = "Copilot",
-                    Cwd = cwd
+                    Cwd = cwd,
+                    ResumeId = resumeId
                 });
 
                 if (File.Exists(eventsFile) && new FileInfo(eventsFile).Length > 0)
@@ -1511,8 +1541,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
             var sessionTable = new Table()
                 .BorderColor(Color.Grey)
                 .Border(TableBorder.Simple)
-                .AddColumn(new TableColumn("Session").Width(25))
-                .AddColumn(new TableColumn("Repo/CWD").Width(18))
+                .AddColumn(new TableColumn("Session").Width(45))
                 .AddColumn(new TableColumn("Agents").Width(7))
                 .AddColumn(new TableColumn("MCPs").Width(6))
                 .AddColumn(new TableColumn("Age").Width(10))
@@ -1532,12 +1561,9 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
                     "Update" => "magenta",
                     _ => "dim"
                 };
-                
-                var cwdDisplay = string.IsNullOrEmpty(session.Cwd) ? "[dim]-[/]" : $"[green]{Markup.Escape(session.Cwd)}[/]";
 
                 sessionTable.AddRow(
                     $"[white]{Markup.Escape(session.Name)}[/]",
-                    cwdDisplay,
                     $"[dim]{session.ProcessCount}[/]",
                     $"[dim]{session.McpCount}[/]",
                     $"[dim]{ageStr}[/]",
@@ -1683,16 +1709,21 @@ static string ExtractPidFromProcessLog(string fileName)
     return match.Success ? match.Groups[1].Value : fileName.Replace(".log", "");
 }
 
-static string DeriveSessionName(string dirOrFileName, DateTime? creationTime = null)
+static string DeriveSessionName(string dirOrFileName, DateTime? creationTime = null, string cwd = "", string resumeId = "")
 {
-    // Extract meaningful session identifier with human-readable date/time
-    // Examples: "session_20260310_093304_86684" -> "Mar 10 09:33 (86684)"
-    //           "copilot-12345" -> "CLI-12345"
+    // Extract meaningful session identifier with date, CWD/repo, and resume ID
+    // Example: "Mar 11 20:39 (58236) | tamresearch1 | 9m ago | Agency"
+    // Simplified for table display: "Mar 11 20:39 | tamresearch1" (time in separate column)
     
     if (dirOrFileName.StartsWith("copilot-"))
     {
         var id = dirOrFileName.Replace("copilot-", "");
-        return "CLI-" + id.Substring(0, Math.Min(8, id.Length));
+        var shortId = id.Substring(0, Math.Min(8, id.Length));
+        
+        // Include CWD if available
+        if (!string.IsNullOrEmpty(cwd))
+            return $"{shortId} | {cwd}";
+        return shortId;
     }
 
     if (dirOrFileName.StartsWith("session_"))
@@ -1701,12 +1732,28 @@ static string DeriveSessionName(string dirOrFileName, DateTime? creationTime = n
         if (parts.Length >= 4 && creationTime.HasValue)
         {
             var shortId = parts[3].Substring(0, Math.Min(5, parts[3].Length));
-            return $"{creationTime.Value:MMM dd HH:mm} ({shortId})";
+            var timeStr = creationTime.Value.ToString("MMM dd HH:mm");
+            
+            // Build display name with optional parts
+            var nameParts = new List<string> { timeStr };
+            
+            if (!string.IsNullOrEmpty(resumeId))
+                nameParts.Add($"({resumeId})");
+            
+            if (!string.IsNullOrEmpty(cwd))
+                nameParts.Add(cwd);
+            else
+                nameParts.Add($"({shortId})");  // Fallback to short ID if no CWD
+            
+            return string.Join(" | ", nameParts);
         }
         else if (parts.Length >= 4)
         {
             // Fallback if no creationTime provided
-            return $"{parts[2].Substring(4)}_{parts[3].Substring(0, Math.Min(5, parts[3].Length))}";
+            var shortId = parts[3].Substring(0, Math.Min(5, parts[3].Length));
+            if (!string.IsNullOrEmpty(cwd))
+                return $"{parts[2].Substring(4)} | {cwd}";
+            return $"{parts[2].Substring(4)}_{shortId}";
         }
     }
 
