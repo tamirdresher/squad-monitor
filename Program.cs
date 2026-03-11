@@ -64,6 +64,10 @@ if (runOnce)
     DisplayRalphHeartbeat(userProfile);
     DisplayRalphLog(userProfile);
     
+    // Token Usage & Model Stats
+    var tokenStats = BuildTokenStatsSection(userProfile);
+    AnsiConsole.Write(tokenStats);
+    
     // Only display GitHub sections if not disabled
     if (!disableGitHub)
     {
@@ -143,6 +147,9 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
 
     // Live Agent Activity (tails agency/copilot logs) — top priority visibility
     sections.Add(BuildLiveAgentFeedSection(userProfile));
+
+    // Token Usage & Model Stats
+    sections.Add(BuildTokenStatsSection(userProfile));
 
     // Ralph Watch Heartbeat
     sections.Add(BuildRalphHeartbeatSection(userProfile));
@@ -485,7 +492,7 @@ static IRenderable BuildRalphLogSection(string userProfile)
 static IRenderable BuildTokenStatsSection(string userProfile)
 {
     var items = new List<IRenderable>();
-    var section = new Rule("[magenta bold]Token Usage & Cost Stats[/] [dim](~/.copilot/logs)[/]") { Justification = Justify.Left };
+    var section = new Rule("[magenta bold]Token Usage & Model Stats[/] [dim](~/.copilot/logs)[/]") { Justification = Justify.Left };
     items.Add(section);
 
     try
@@ -498,7 +505,6 @@ static IRenderable BuildTokenStatsSection(string userProfile)
             return new Rows(items);
         }
 
-        // Find the most recent log files (last 5)
         var logFiles = new DirectoryInfo(copilotLogDir)
             .GetFiles("*.log")
             .OrderByDescending(f => f.LastWriteTime)
@@ -512,13 +518,17 @@ static IRenderable BuildTokenStatsSection(string userProfile)
             return new Rows(items);
         }
 
-        // Aggregate stats
+        // Aggregate model stats from assistant_usage events
         var modelStats = new Dictionary<string, (int calls, long promptTokens, long completionTokens, long cachedTokens, double totalCost)>();
         int premiumRequests = 0;
         long totalPromptTokens = 0;
         long totalCompletionTokens = 0;
         long totalCachedTokens = 0;
         double totalCost = 0;
+
+        // Track context window from session_usage_info (keep latest per session)
+        long latestTokenLimit = 0;
+        long latestCurrentTokens = 0;
 
         foreach (var logFile in logFiles)
         {
@@ -527,63 +537,48 @@ static IRenderable BuildTokenStatsSection(string userProfile)
                 using var fs = new FileStream(logFile.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 using var reader = new StreamReader(fs);
                 string? line;
-                
+
                 while ((line = reader.ReadLine()) != null)
                 {
-                    // Parse assistant_usage events
                     if (line.Contains("\"kind\": \"assistant_usage\""))
                     {
-                        // Read the next ~30 lines to get the full JSON object
-                        var jsonLines = new List<string> { line };
-                        for (int i = 0; i < 30; i++)
-                        {
-                            var nextLine = reader.ReadLine();
-                            if (nextLine == null) break;
-                            jsonLines.Add(nextLine);
-                            if (nextLine.Trim() == "},") break;
-                        }
-                        
-                        var jsonText = string.Join("\n", jsonLines);
-                        
-                        // Extract model name
+                        var jsonText = ReadAheadBlock(reader, line);
+
                         var modelMatch = Regex.Match(jsonText, "\"model\":\\s*\"([^\"]+)\"");
                         var model = modelMatch.Success ? modelMatch.Groups[1].Value : "unknown";
-                        
-                        // Check if premium (opus models)
-                        if (model.Contains("opus"))
-                        {
+
+                        if (model.Contains("opus", StringComparison.OrdinalIgnoreCase))
                             premiumRequests++;
-                        }
-                        
-                        // Extract metrics
-                        var inputTokensMatch = Regex.Match(jsonText, "\"input_tokens\":\\s*(\\d+)");
-                        var outputTokensMatch = Regex.Match(jsonText, "\"output_tokens\":\\s*(\\d+)");
-                        var cacheReadMatch = Regex.Match(jsonText, "\"cache_read_tokens\":\\s*(\\d+)");
-                        var costMatch = Regex.Match(jsonText, "\"cost\":\\s*([\\d.]+)");
-                        
-                        var inputTokens = inputTokensMatch.Success ? long.Parse(inputTokensMatch.Groups[1].Value) : 0;
-                        var outputTokens = outputTokensMatch.Success ? long.Parse(outputTokensMatch.Groups[1].Value) : 0;
-                        var cacheRead = cacheReadMatch.Success ? long.Parse(cacheReadMatch.Groups[1].Value) : 0;
-                        var cost = costMatch.Success ? double.Parse(costMatch.Groups[1].Value) : 0;
-                        
+
+                        var inputTokens = ExtractLong(jsonText, "\"input_tokens\":\\s*(\\d+)");
+                        var outputTokens = ExtractLong(jsonText, "\"output_tokens\":\\s*(\\d+)");
+                        var cacheRead = ExtractLong(jsonText, "\"cache_read_tokens\":\\s*(\\d+)");
+                        var cost = ExtractDouble(jsonText, "\"cost\":\\s*([\\d.]+)");
+
                         totalPromptTokens += inputTokens;
                         totalCompletionTokens += outputTokens;
                         totalCachedTokens += cacheRead;
                         totalCost += cost;
-                        
-                        // Aggregate by model
+
                         if (!modelStats.ContainsKey(model))
-                        {
                             modelStats[model] = (0, 0, 0, 0, 0);
+                        var s = modelStats[model];
+                        modelStats[model] = (s.calls + 1, s.promptTokens + inputTokens,
+                            s.completionTokens + outputTokens, s.cachedTokens + cacheRead,
+                            s.totalCost + cost);
+                    }
+                    else if (line.Contains("\"kind\": \"session_usage_info\""))
+                    {
+                        var jsonText = ReadAheadBlock(reader, line);
+
+                        var tokenLimit = ExtractLong(jsonText, "\"token_limit\":\\s*(\\d+)");
+                        var currentTokens = ExtractLong(jsonText, "\"current_tokens\":\\s*(\\d+)");
+
+                        if (tokenLimit > 0)
+                        {
+                            latestTokenLimit = tokenLimit;
+                            latestCurrentTokens = currentTokens;
                         }
-                        var stats = modelStats[model];
-                        modelStats[model] = (
-                            stats.calls + 1,
-                            stats.promptTokens + inputTokens,
-                            stats.completionTokens + outputTokens,
-                            stats.cachedTokens + cacheRead,
-                            stats.totalCost + cost
-                        );
                     }
                 }
             }
@@ -600,7 +595,7 @@ static IRenderable BuildTokenStatsSection(string userProfile)
             return new Rows(items);
         }
 
-        // Build summary table
+        // Build per-model table
         var table = new Table()
             .Border(TableBorder.Rounded)
             .BorderColor(Color.Grey)
@@ -616,52 +611,54 @@ static IRenderable BuildTokenStatsSection(string userProfile)
         {
             var model = kvp.Key;
             var stats = kvp.Value;
-            
-            // Shorten model name for display
-            var displayModel = model
-                .Replace("claude-", "")
-                .Replace("gpt-", "");
+
+            var displayModel = model.Replace("claude-", "").Replace("gpt-", "");
             if (displayModel.Length > 20)
                 displayModel = displayModel.Substring(0, 17) + "...";
-            
-            // Calculate cache hit percentage
+
             var totalTokens = stats.promptTokens + stats.cachedTokens;
             var cachePercent = totalTokens > 0 ? (double)stats.cachedTokens / totalTokens * 100 : 0;
             var cacheColor = cachePercent > 50 ? "green" : cachePercent > 20 ? "yellow" : "dim";
-            
-            // Format token counts (K for thousands, M for millions)
-            var promptStr = FormatTokenCount(stats.promptTokens);
-            var completionStr = FormatTokenCount(stats.completionTokens);
-            var cachedStr = FormatTokenCount(stats.cachedTokens);
-            
-            // Cost color: green for low, yellow for medium, red for high
             var costColor = stats.totalCost < 5 ? "green" : stats.totalCost < 20 ? "yellow" : "red";
-            
+
             table.AddRow(
                 $"[cyan]{Markup.Escape(displayModel)}[/]",
                 $"[white]{stats.calls}[/]",
-                $"[blue]{promptStr}[/]",
-                $"[green]{completionStr}[/]",
-                $"[yellow]{cachedStr}[/]",
+                $"[blue]{FormatTokenCount(stats.promptTokens)}[/]",
+                $"[green]{FormatTokenCount(stats.completionTokens)}[/]",
+                $"[yellow]{FormatTokenCount(stats.cachedTokens)}[/]",
                 $"[{cacheColor}]{cachePercent:F0}%[/]",
                 $"[{costColor}]${stats.totalCost:F2}[/]"
             );
         }
 
         items.Add(table);
-        
-        // Add summary line
-        var totalCachePercent = (totalPromptTokens + totalCachedTokens) > 0 
-            ? (double)totalCachedTokens / (totalPromptTokens + totalCachedTokens) * 100 
+
+        // Summary line with all stats
+        var totalCachePercent = (totalPromptTokens + totalCachedTokens) > 0
+            ? (double)totalCachedTokens / (totalPromptTokens + totalCachedTokens) * 100
             : 0;
         var totalCalls = modelStats.Values.Sum(s => s.calls);
-        
-        items.Add(new Markup($"  [dim]Total:[/] {totalCalls} calls  |  " +
-                            $"Prompt: [blue]{FormatTokenCount(totalPromptTokens)}[/]  |  " +
-                            $"Completion: [green]{FormatTokenCount(totalCompletionTokens)}[/]  |  " +
-                            $"Cached: [yellow]{FormatTokenCount(totalCachedTokens)}[/] ([cyan]{totalCachePercent:F0}%[/])  |  " +
-                            $"Premium: [magenta]{premiumRequests}[/]  |  " +
-                            $"Cost: [white]${totalCost:F2}[/]"));
+
+        var summaryParts = new List<string>
+        {
+            $"[dim]Total:[/] {totalCalls} calls",
+            $"Prompt: [blue]{FormatTokenCount(totalPromptTokens)}[/]",
+            $"Completion: [green]{FormatTokenCount(totalCompletionTokens)}[/]",
+            $"Cached: [yellow]{FormatTokenCount(totalCachedTokens)}[/] ([cyan]{totalCachePercent:F0}%[/])",
+            $"Premium: [magenta]{premiumRequests}[/]",
+            $"Cost: [white]${totalCost:F2}[/]"
+        };
+
+        // Context window usage from session_usage_info
+        if (latestTokenLimit > 0)
+        {
+            var ctxPercent = (double)latestCurrentTokens / latestTokenLimit * 100;
+            var ctxColor = ctxPercent > 80 ? "red" : ctxPercent > 50 ? "yellow" : "green";
+            summaryParts.Add($"Context: [{ctxColor}]{ctxPercent:F1}%[/] [dim]({FormatTokenCount(latestCurrentTokens)}/{FormatTokenCount(latestTokenLimit)})[/]");
+        }
+
+        items.Add(new Markup("  " + string.Join("  |  ", summaryParts)));
     }
     catch (Exception ex)
     {
@@ -670,6 +667,40 @@ static IRenderable BuildTokenStatsSection(string userProfile)
 
     items.Add(Text.Empty);
     return new Rows(items);
+}
+
+static string ReadAheadBlock(StreamReader reader, string firstLine)
+{
+    // Read lines until we hit the top-level closing brace (no leading whitespace)
+    var lines = new List<string> { firstLine };
+    for (int i = 0; i < 80; i++)
+    {
+        var next = reader.ReadLine();
+        if (next == null) break;
+        lines.Add(next);
+        // Stop at a closing brace at column 0 (top-level JSON boundary)
+        if (next.Length > 0 && next[0] == '}')
+            break;
+    }
+    return string.Join("\n", lines);
+}
+
+static long ExtractLong(string text, string pattern)
+{
+    var m = Regex.Match(text, pattern);
+    return m.Success && long.TryParse(m.Groups[1].Value, out var v) ? v : 0;
+}
+
+static double ExtractDouble(string text, string pattern)
+{
+    var m = Regex.Match(text, pattern);
+    return m.Success && double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : 0;
+}
+
+static string? ExtractString(string text, string pattern)
+{
+    var m = Regex.Match(text, pattern);
+    return m.Success ? m.Groups[1].Value : null;
 }
 
 static string FormatTokenCount(long count)
