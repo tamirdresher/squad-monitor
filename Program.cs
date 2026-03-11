@@ -9,8 +9,10 @@ using System.Text.RegularExpressions;
 var interval = 5;
 var runOnce = false;
 var orchestrationOnlyMode = false;
+var multiSessionMode = false;
 var disableGitHub = false;
 var useSharpUI = false;
+var sessionWindowMinutes = 30;
 var teamRoot = FindTeamRoot();
 var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
@@ -32,6 +34,15 @@ for (int i = 0; i < args.Length; i++)
     else if (args[i] == "--sharp-ui" || args[i] == "--beta")
     {
         useSharpUI = true;
+    }
+    else if (args[i] == "--multi-session" || args[i] == "-m")
+    {
+        multiSessionMode = true;
+    }
+    else if (args[i] == "--session-window" && i + 1 < args.Length && int.TryParse(args[i + 1], out var sw))
+    {
+        sessionWindowMinutes = sw;
+        i++;
     }
 }
 
@@ -60,7 +71,8 @@ if (disableGitHub)
 {
     AnsiConsole.MarkupLine($"[dim]GitHub integration: disabled (gh CLI not available)[/]");
 }
-AnsiConsole.MarkupLine($"[dim]Press 'o' or 'O' to toggle orchestration-only view[/]");
+AnsiConsole.MarkupLine($"[dim]Press 'o' to toggle orchestration view | 'm' to toggle multi-session view[/]");
+AnsiConsole.MarkupLine($"[dim]Use --multi-session (-m) for focused session view | --session-window <min> to set scan window (default 30)[/]");
 AnsiConsole.MarkupLine($"[dim]Use --sharp-ui or --beta to try the new SharpConsoleUI interface[/]");
 AnsiConsole.WriteLine();
 
@@ -75,27 +87,35 @@ if (runOnce)
     AnsiConsole.Write(header);
     AnsiConsole.WriteLine();
 
-    DisplayRalphHeartbeat(userProfile);
-    DisplayRalphLog(userProfile);
-    
-    // Token Usage & Model Stats
-    var tokenStats = BuildTokenStatsSection(userProfile);
-    AnsiConsole.Write(tokenStats);
-    
-    // Only display GitHub sections if not disabled
-    if (!disableGitHub)
+    if (multiSessionMode)
     {
-        DisplayGitHubIssues(teamRoot);
-        DisplayGitHubPRs(teamRoot);
-        DisplayRecentlyMergedPRs(teamRoot);
+        var multiSessionContent = BuildMultiSessionContent(now, userProfile, sessionWindowMinutes);
+        AnsiConsole.Write(multiSessionContent);
     }
-    
-    var activities = LoadActivities(teamRoot);
-    DisplayOrchestrationLog(activities);
-    
-    // Live Agent Feed
-    var liveAgentFeed = BuildLiveAgentFeedSection(userProfile);
-    AnsiConsole.Write(liveAgentFeed);
+    else
+    {
+        DisplayRalphHeartbeat(userProfile);
+        DisplayRalphLog(userProfile);
+        
+        // Token Usage & Model Stats
+        var tokenStats = BuildTokenStatsSection(userProfile);
+        AnsiConsole.Write(tokenStats);
+        
+        // Only display GitHub sections if not disabled
+        if (!disableGitHub)
+        {
+            DisplayGitHubIssues(teamRoot);
+            DisplayGitHubPRs(teamRoot);
+            DisplayRecentlyMergedPRs(teamRoot);
+        }
+        
+        var activities = LoadActivities(teamRoot);
+        DisplayOrchestrationLog(activities);
+        
+        // Live Agent Feed
+        var liveAgentFeed = BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes);
+        AnsiConsole.Write(liveAgentFeed);
+    }
 }
 else
 {
@@ -115,6 +135,12 @@ else
                     if (key.Key == ConsoleKey.O)
                     {
                         orchestrationOnlyMode = !orchestrationOnlyMode;
+                        if (orchestrationOnlyMode) multiSessionMode = false;
+                    }
+                    else if (key.Key == ConsoleKey.M)
+                    {
+                        multiSessionMode = !multiSessionMode;
+                        if (multiSessionMode) orchestrationOnlyMode = false;
                     }
                 }
 
@@ -122,9 +148,11 @@ else
                 AnsiConsole.Clear();
 
                 var now = DateTime.Now;
-                var content = orchestrationOnlyMode 
-                    ? BuildOrchestrationOnlyContent(now, userProfile, teamRoot)
-                    : BuildDashboardContent(now, userProfile, teamRoot, disableGitHub);
+                var content = multiSessionMode
+                    ? BuildMultiSessionContent(now, userProfile, sessionWindowMinutes)
+                    : orchestrationOnlyMode 
+                        ? BuildOrchestrationOnlyContent(now, userProfile, teamRoot)
+                        : BuildDashboardContent(now, userProfile, teamRoot, disableGitHub, sessionWindowMinutes);
                 layout.Update(content);
                 ctx.Refresh();
 
@@ -138,7 +166,7 @@ return 0;
 
 // ─── Dashboard Content Builder ─────────────────────────────────────────────
 
-static IRenderable BuildDashboardContent(DateTime now, string userProfile, string teamRoot, bool disableGitHub)
+static IRenderable BuildDashboardContent(DateTime now, string userProfile, string teamRoot, bool disableGitHub, int sessionWindowMinutes)
 {
     var sections = new List<IRenderable>();
 
@@ -160,7 +188,7 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
     sections.Add(Text.Empty);
 
     // Live Agent Activity (tails agency/copilot logs) — top priority visibility
-    sections.Add(BuildLiveAgentFeedSection(userProfile));
+    sections.Add(BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes));
 
     // Token Usage & Model Stats
     sections.Add(BuildTokenStatsSection(userProfile));
@@ -214,6 +242,25 @@ static IRenderable BuildOrchestrationOnlyContent(DateTime now, string userProfil
     // Combine all sections into a group
     var rows = new Rows(sections);
     return rows;
+}
+
+// ─── Multi-Session Focused Dashboard Builder ──────────────────────────────
+
+static IRenderable BuildMultiSessionContent(DateTime now, string userProfile, int sessionWindowMinutes)
+{
+    var sections = new List<IRenderable>();
+
+    var header = new Rule($"[green bold]Squad Monitor v2 — Multi-Session View[/] [dim]— {now:yyyy-MM-dd HH:mm:ss} — window: {sessionWindowMinutes}m[/]")
+    {
+        Justification = Justify.Left
+    };
+    sections.Add(header);
+    sections.Add(Text.Empty);
+
+    // Full multi-session view with expanded feed (80 entries vs 30)
+    sections.Add(BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes, expandedFeed: true));
+
+    return new Rows(sections);
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -1164,7 +1211,7 @@ static IRenderable BuildDetailedOrchestrationSection(List<AgentActivity> activit
 
 // ─── Live Agent Feed Section (Multi-Session) ────────────────────────────────
 
-static IRenderable BuildLiveAgentFeedSection(string userProfile)
+static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWindowMinutes = 30, bool expandedFeed = false)
 {
     var items = new List<IRenderable>();
     var section = new Rule("[green bold]Live Agent Feed — Multi-Session View[/]") { Justification = Justify.Left };
@@ -1182,7 +1229,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         {
             var agencySessions = new DirectoryInfo(agencyLogDir)
                 .GetDirectories()
-                .Where(d => (now - d.LastWriteTime).TotalHours <= 4)
+                .Where(d => (now - d.LastWriteTime).TotalMinutes <= sessionWindowMinutes)
                 .ToList();
 
             foreach (var sessionDir in agencySessions)
@@ -1244,7 +1291,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         {
             var copilotLogs = new DirectoryInfo(copilotLogDir)
                 .GetFiles("process-*.log")
-                .Where(f => f.Length > 0 && (now - f.LastWriteTime).TotalHours <= 4)
+                .Where(f => f.Length > 0 && (now - f.LastWriteTime).TotalMinutes <= sessionWindowMinutes)
                 .ToList();
 
             foreach (var logFile in copilotLogs)
@@ -1265,6 +1312,49 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
 
                 var entries = ExtractFeedEntriesFromLog(logFile.FullName, sessionName);
                 allFeedEntries.AddRange(entries);
+            }
+
+            // Also scan copilot session subdirectories (e.g., session dirs with events.jsonl)
+            var copilotSessionDirs = new DirectoryInfo(copilotLogDir)
+                .GetDirectories()
+                .Where(d => (now - d.LastWriteTime).TotalMinutes <= sessionWindowMinutes)
+                .ToList();
+
+            foreach (var sessionDir in copilotSessionDirs)
+            {
+                var logFiles = sessionDir.GetFiles("*.log").Where(f => f.Length > 0).ToList();
+                var eventsFile = Path.Combine(sessionDir.FullName, "events.jsonl");
+                if (logFiles.Count == 0 && !File.Exists(eventsFile)) continue;
+
+                var shortId = DeriveSessionName(sessionDir.Name);
+                var sessionName = $"Copilot-{shortId}";
+                var sessionAge = now - sessionDir.CreationTime;
+                var lastWrite = logFiles.Count > 0 ? logFiles.Max(f => f.LastWriteTime) : sessionDir.LastWriteTime;
+
+                activeSessions.Add(new SessionInfo
+                {
+                    Name = sessionName,
+                    FullPath = sessionDir.FullName,
+                    Age = sessionAge,
+                    LastWrite = lastWrite,
+                    ProcessCount = logFiles.Count(f => f.Name.StartsWith("process-")),
+                    McpCount = logFiles.Count(f => f.Name.Contains("mcp")),
+                    Type = "Copilot"
+                });
+
+                if (File.Exists(eventsFile) && new FileInfo(eventsFile).Length > 0)
+                {
+                    var feedEntries = ExtractFeedEntriesFromEvents(eventsFile, sessionName);
+                    allFeedEntries.AddRange(feedEntries);
+                }
+                else
+                {
+                    foreach (var logFile in logFiles.Where(f => f.Name.StartsWith("process-")))
+                    {
+                        var feedEntries = ExtractFeedEntriesFromLog(logFile.FullName, sessionName);
+                        allFeedEntries.AddRange(feedEntries);
+                    }
+                }
             }
         }
 
@@ -1300,6 +1390,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
                 {
                     "Ralph" => "cyan",
                     "CLI" => "yellow",
+                    "Copilot" => "blue",
                     "Interactive" => "green",
                     "Update" => "magenta",
                     _ => "dim"
@@ -1319,7 +1410,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         }
         else
         {
-            items.Add(new Markup("[dim]  No active sessions found in the last 30 minutes[/]"));
+            items.Add(new Markup($"[dim]  No active sessions found in the last {sessionWindowMinutes} minutes[/]"));
             items.Add(Text.Empty);
             return new Rows(items);
         }
@@ -1327,13 +1418,13 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile)
         // Merged Activity Feed
         if (allFeedEntries.Count > 0)
         {
-            // Sort chronologically and take last 30
+            var feedLimit = expandedFeed ? 80 : 30;
             var recentEntries = allFeedEntries
                 .OrderBy(e => e.TimeValue)
-                .TakeLast(30)
+                .TakeLast(feedLimit)
                 .ToList();
 
-            items.Add(new Markup("[bold]Merged Activity Feed (last 30 entries):[/]"));
+            items.Add(new Markup($"[bold]Merged Activity Feed (last {recentEntries.Count} of {allFeedEntries.Count} entries):[/]"));
             items.Add(Text.Empty);
 
             var activityTable = new Table()
