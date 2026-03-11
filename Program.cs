@@ -1,5 +1,6 @@
 using Spectre.Console;
 using Spectre.Console.Rendering;
+using SquadMonitor;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
@@ -9,6 +10,7 @@ var interval = 5;
 var runOnce = false;
 var orchestrationOnlyMode = false;
 var disableGitHub = false;
+var useSharpUI = false;
 var teamRoot = FindTeamRoot();
 var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
@@ -27,6 +29,17 @@ for (int i = 0; i < args.Length; i++)
     {
         disableGitHub = true;
     }
+    else if (args[i] == "--sharp-ui" || args[i] == "--beta")
+    {
+        useSharpUI = true;
+    }
+}
+
+// If SharpConsoleUI mode is enabled, run the new TUI
+if (useSharpUI)
+{
+    await SharpUI.RunAsync(teamRoot, interval);
+    return 0;
 }
 
 if (teamRoot == null)
@@ -48,6 +61,7 @@ if (disableGitHub)
     AnsiConsole.MarkupLine($"[dim]GitHub integration: disabled (gh CLI not available)[/]");
 }
 AnsiConsole.MarkupLine($"[dim]Press 'o' or 'O' to toggle orchestration-only view[/]");
+AnsiConsole.MarkupLine($"[dim]Use --sharp-ui or --beta to try the new SharpConsoleUI interface[/]");
 AnsiConsole.WriteLine();
 
 if (runOnce)
@@ -580,28 +594,6 @@ static IRenderable BuildTokenStatsSection(string userProfile)
                             latestCurrentTokens = currentTokens;
                         }
                     }
-                    // Parse session_usage_info for context window stats
-                    else if (line.Contains("\"kind\": \"session_usage_info\""))
-                    {
-                        // Read ~15 lines to capture the metrics block (token_limit, current_tokens)
-                        var jsonLines = new List<string> { line };
-                        for (int j = 0; j < 15; j++)
-                        {
-                            var nextLine = reader.ReadLine();
-                            if (nextLine == null) break;
-                            jsonLines.Add(nextLine);
-                        }
-                        
-                        var jsonText = string.Join("\n", jsonLines);
-                        
-                        var tokenLimitMatch = Regex.Match(jsonText, "\"token_limit\":\\s*(\\d+)");
-                        var currentTokensMatch = Regex.Match(jsonText, "\"current_tokens\":\\s*(\\d+)");
-                        
-                        if (tokenLimitMatch.Success)
-                            latestTokenLimit = long.Parse(tokenLimitMatch.Groups[1].Value);
-                        if (currentTokensMatch.Success)
-                            latestCurrentTokens = long.Parse(currentTokensMatch.Groups[1].Value);
-                    }
                 }
             }
             catch
@@ -723,24 +715,6 @@ static string? ExtractString(string text, string pattern)
 {
     var m = Regex.Match(text, pattern);
     return m.Success ? m.Groups[1].Value : null;
-}
-
-static double EstimateModelCost(string model, long promptTokens, long completionTokens, long cachedTokens)
-{
-    // Per-million-token pricing (approximate mid-2025 rates)
-    var (inputRate, outputRate, cachedRate) = model switch
-    {
-        _ when model.Contains("opus") => (15.0, 75.0, 1.5),
-        _ when model.Contains("sonnet") => (3.0, 15.0, 0.3),
-        _ when model.Contains("haiku") => (0.25, 1.25, 0.025),
-        _ when model.Contains("gpt-5") => (5.0, 15.0, 1.25),
-        _ when model.Contains("gpt-4") => (2.0, 8.0, 0.5),
-        _ when model.Contains("gemini") => (1.25, 10.0, 0.3),
-        _ => (3.0, 15.0, 0.3) // default to sonnet-tier
-    };
-
-    var nonCachedInput = Math.Max(0, promptTokens - cachedTokens);
-    return (nonCachedInput * inputRate + completionTokens * outputRate + cachedTokens * cachedRate) / 1_000_000.0;
 }
 
 static string FormatTokenCount(long count)
