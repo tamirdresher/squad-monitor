@@ -1715,34 +1715,75 @@ static string ExtractPidFromProcessLog(string fileName)
 
 static string DeriveSessionName(string dirOrFileName, DateTime? creationTime = null, string cwd = "", string resumeId = "")
 {
-    // Extract meaningful session identifier with date/time
-    // CWD and Resume ID are now shown in separate table columns
+    // Generate comprehensive session display with date+time, resume ID, and better formatting
     
     if (dirOrFileName.StartsWith("copilot-"))
     {
         var id = dirOrFileName.Replace("copilot-", "");
         var shortId = id.Substring(0, Math.Min(8, id.Length));
+        
+        // If we have creation time, show it with the ID
+        if (creationTime.HasValue)
+        {
+            var timeStr = creationTime.Value.ToString("MMM dd HH:mm");
+            return $"{timeStr} ({shortId})";
+        }
+        
         return shortId;
     }
 
     if (dirOrFileName.StartsWith("session_"))
     {
         var parts = dirOrFileName.Split('_');
-        if (parts.Length >= 4 && creationTime.HasValue)
+        if (parts.Length >= 4)
         {
             var shortId = parts[3].Substring(0, Math.Min(5, parts[3].Length));
-            var timeStr = creationTime.Value.ToString("MMM dd HH:mm");
-            return $"{timeStr} ({shortId})";
-        }
-        else if (parts.Length >= 4)
-        {
-            // Fallback if no creationTime provided
-            var shortId = parts[3].Substring(0, Math.Min(5, parts[3].Length));
-            return $"{parts[2].Substring(4)}_{shortId}";
+            
+            // Always try to show date+time if we have creationTime
+            if (creationTime.HasValue)
+            {
+                var timeStr = creationTime.Value.ToString("MMM dd HH:mm");
+                return $"{timeStr} ({shortId})";
+            }
+            else
+            {
+                // Fallback: parse date from directory name (session_20240311_203945_58236)
+                if (parts.Length >= 3 && parts[1].Length >= 8 && parts[2].Length >= 6)
+                {
+                    try
+                    {
+                        var dateStr = parts[1]; // 20240311
+                        var timeStr = parts[2]; // 203945
+                        var year = int.Parse(dateStr.Substring(0, 4));
+                        var month = int.Parse(dateStr.Substring(4, 2));
+                        var day = int.Parse(dateStr.Substring(6, 2));
+                        var hour = int.Parse(timeStr.Substring(0, 2));
+                        var minute = int.Parse(timeStr.Substring(2, 2));
+                        
+                        var parsedTime = new DateTime(year, month, day, hour, minute, 0);
+                        var formattedTime = parsedTime.ToString("MMM dd HH:mm");
+                        return $"{formattedTime} ({shortId})";
+                    }
+                    catch
+                    {
+                        // If parsing fails, use the fallback
+                    }
+                }
+                
+                // Last resort fallback
+                return $"{parts[2].Substring(0, Math.Min(6, parts[2].Length))}_{shortId}";
+            }
         }
     }
 
-    // Fallback: first 20 chars
+    // Fallback for unknown formats
+    if (creationTime.HasValue)
+    {
+        var timeStr = creationTime.Value.ToString("MMM dd HH:mm");
+        var shortName = dirOrFileName.Substring(0, Math.Min(8, dirOrFileName.Length));
+        return $"{timeStr} ({shortName})";
+    }
+    
     return dirOrFileName.Substring(0, Math.Min(20, dirOrFileName.Length));
 }
 
