@@ -7,6 +7,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+// Ensure emoji and Unicode render correctly on Windows console
+Console.OutputEncoding = Encoding.UTF8;
+
 var interval = 5;
 var runOnce = false;
 var orchestrationOnlyMode = false;
@@ -67,7 +70,7 @@ if (!disableGitHub && !IsGhCliAvailable())
 }
 
 AnsiConsole.MarkupLine($"[dim]Squad Monitor v2 - Refresh interval: {interval}s[/]");
-AnsiConsole.MarkupLine($"[dim]Team root: {teamRoot}[/]");
+AnsiConsole.MarkupLine($"[dim]Team root: {Markup.Escape(teamRoot)}[/]");
 if (disableGitHub)
 {
     AnsiConsole.MarkupLine($"[dim]GitHub integration: disabled (gh CLI not available)[/]");
@@ -484,7 +487,7 @@ static IRenderable BuildRalphLogSection(string userProfile)
             return new Rows(items);
         }
 
-        var startPos = Math.Max(0, fileLength - 500);
+        var startPos = Math.Max(0, fileLength - 2000);
         fs.Seek(startPos, SeekOrigin.Begin);
         var tail = reader.ReadToEnd();
 
@@ -498,8 +501,9 @@ static IRenderable BuildRalphLogSection(string userProfile)
             return new Rows(items);
         }
 
-        // Parse log entries: 2026-03-08T16:37:47 | Round=3 | ExitCode=0 | Duration=277.9241812s | ...
-        var logEntryRegex = new Regex(@"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*Round=(\d+)\s*\|\s*ExitCode=(\d+)\s*\|\s*Duration=([\d.]+)s");
+        // Parse log entries — newer format includes Status, Issues, PRs, Actions fields:
+        // 2026-03-12T09:24:45 | Round=165 | ExitCode=0 | Duration=1560.4s | Failures=0 | Status=SUCCESS | Issues=0 | PRs=0 | Actions=0
+        var logEntryRegex = new Regex(@"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*Round=(\d+)\s*\|\s*ExitCode=(\d+)\s*\|\s*Duration=([\d.]+)s(?:\s*\|\s*Failures=(\d+))?(?:\s*\|\s*Status=(\w+))?");
 
         foreach (var line in last5)
         {
@@ -513,6 +517,7 @@ static IRenderable BuildRalphLogSection(string userProfile)
                 var round = match.Groups[2].Value;
                 var exitCode = match.Groups[3].Value;
                 var durationStr = match.Groups[4].Value;
+                var statusField = match.Groups[6].Success ? match.Groups[6].Value : null;
 
                 if (DateTime.TryParse(startTimeStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var startTime) &&
                     double.TryParse(durationStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var durationSecs))
@@ -526,8 +531,12 @@ static IRenderable BuildRalphLogSection(string userProfile)
                     var durationSeconds = (int)(durationSecs % 60);
                     var durationFormatted = $"{durationMinutes}m {durationSeconds}s";
                     
-                    var statusIcon = exitCode == "0" ? "✅" : "❌";
-                    var color = exitCode == "0" ? "green" : "red";
+                    // Use Status field from newer format, fall back to ExitCode
+                    var isSuccess = statusField != null 
+                        ? statusField.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase) 
+                        : exitCode == "0";
+                    var statusIcon = isSuccess ? "✅" : "❌";
+                    var color = isSuccess ? "green" : "red";
                     
                     items.Add(new Markup($"  [{color}]Round {round} | Started {startLocal} | Finished {endLocal} | Duration {durationFormatted} | {statusIcon}[/]"));
                 }
@@ -991,7 +1000,9 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
                     }
                 }
             }
-            var assigneesStr = assigneesList.Count > 0 ? string.Join(", ", assigneesList) : "[dim]none[/]";
+            var assigneesStr = assigneesList.Count > 0 
+                ? $"[cyan]{Markup.Escape(string.Join(", ", assigneesList))}[/]" 
+                : "[dim]none[/]";
 
             if (title.Length > 40)
                 title = title.Substring(0, 37) + "...";
@@ -1615,7 +1626,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
 
                 activityTable.AddRow(
                     $"[dim]{Markup.Escape(entry.Time)}[/]",
-                    entry.Icon,
+                    Markup.Escape(entry.Icon),
                     $"[{sessionColor}]{Markup.Escape(entry.SessionName)}[/]",
                     Markup.Escape(entry.Text));
             }
@@ -1923,7 +1934,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "A",
+                        Icon = "🤖",
                         Text = $"Spawned {agentName}",
                         SessionName = sessionName
                     });
@@ -1934,7 +1945,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "[ok]",
+                        Icon = "✅",
                         Text = "Sub-agent completed",
                         SessionName = sessionName
                     });
@@ -1946,7 +1957,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "T",
+                        Icon = "💭",
                         Text = $"Turn {turnId} started",
                         SessionName = sessionName
                     });
@@ -1957,7 +1968,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "*",
+                        Icon = "🏁",
                         Text = "Task completed",
                         SessionName = sessionName
                     });
@@ -2011,7 +2022,7 @@ static List<FeedEntry> ExtractFeedEntriesFromLog(string logPath, string sessionN
                     {
                         Time = dt.ToLocalTime().ToString("HH:mm:ss"),
                         TimeValue = dt.ToLocalTime(),
-                        Icon = "L",
+                        Icon = "🔧",
                         Text = $"Result: {resultText}",
                         SessionName = sessionName
                     });
@@ -2072,21 +2083,21 @@ static string GetToolIcon(string toolName)
 {
     return toolName switch
     {
-        "powershell" => ">",
-        "edit" => "E",
-        "create" => "+",
-        "view" => "V",
-        "grep" => "?",
-        "glob" => "?",
-        "task" => "A",
-        "task_complete" => "*",
-        _ when toolName.StartsWith("github-mcp") => "@",
-        _ when toolName.StartsWith("azure-devops") => "@",
-        _ when toolName.StartsWith("playwright") => "W",
-        _ when toolName.StartsWith("workiq") => "M",
-        _ when toolName.StartsWith("enghub") => "D",
-        _ when toolName.Contains("search") => "?",
-        _ => "."
+        "powershell" => "⚡",
+        "edit" => "✏️",
+        "create" => "📄",
+        "view" => "👁️",
+        "grep" => "🔍",
+        "glob" => "🔍",
+        "task" => "🤖",
+        "task_complete" => "✅",
+        _ when toolName.StartsWith("github-mcp") => "🔧",
+        _ when toolName.StartsWith("azure-devops") => "🔧",
+        _ when toolName.StartsWith("playwright") => "🔧",
+        _ when toolName.StartsWith("workiq") => "🔧",
+        _ when toolName.StartsWith("enghub") => "🔧",
+        _ when toolName.Contains("search") => "🔍",
+        _ => "🔧"
     };
 }
 
@@ -2186,7 +2197,6 @@ static void DisplayRalphLog(string userProfile)
 
     try
     {
-        // Read last 500 chars to get recent entries
         using var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         var tailSize = Math.Min(2000, fs.Length);
         fs.Seek(-tailSize, SeekOrigin.End);
@@ -2194,7 +2204,6 @@ static void DisplayRalphLog(string userProfile)
         var tail = reader.ReadToEnd();
 
         var lines = tail.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        // Show last 5 meaningful lines
         var recentLines = lines
             .Where(l => !string.IsNullOrWhiteSpace(l))
             .TakeLast(5)
@@ -2206,17 +2215,54 @@ static void DisplayRalphLog(string userProfile)
         }
         else
         {
+            // Parse structured log format:
+            // 2026-03-12T09:24:45 | Round=165 | ExitCode=0 | Duration=1560.4s | Failures=0 | Status=SUCCESS | Issues=0 | PRs=0 | Actions=0
+            var logEntryRegex = new Regex(@"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*Round=(\d+)\s*\|\s*ExitCode=(\d+)\s*\|\s*Duration=([\d.]+)s(?:\s*\|\s*Failures=(\d+))?(?:\s*\|\s*Status=(\w+))?");
+
             foreach (var line in recentLines)
             {
                 var trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed)) continue;
+
+                var match = logEntryRegex.Match(trimmed);
+                if (match.Success)
+                {
+                    var startTimeStr = match.Groups[1].Value;
+                    var round = match.Groups[2].Value;
+                    var exitCode = match.Groups[3].Value;
+                    var durationStr = match.Groups[4].Value;
+                    var statusField = match.Groups[6].Success ? match.Groups[6].Value : null;
+
+                    if (DateTime.TryParse(startTimeStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var startTime) &&
+                        double.TryParse(durationStr, NumberStyles.Float, CultureInfo.InvariantCulture, out var durationSecs))
+                    {
+                        var endTime = startTime.AddSeconds(durationSecs);
+                        var startLocal = startTime.ToString("HH:mm:ss");
+                        var endLocal = endTime.ToString("HH:mm:ss");
+
+                        var durationMinutes = (int)(durationSecs / 60);
+                        var durationSeconds = (int)(durationSecs % 60);
+                        var durationFormatted = $"{durationMinutes}m {durationSeconds}s";
+
+                        var isSuccess = statusField != null
+                            ? statusField.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase)
+                            : exitCode == "0";
+                        var statusIcon = isSuccess ? "✅" : "❌";
+                        var color = isSuccess ? "green" : "red";
+
+                        AnsiConsole.MarkupLine($"  [{color}]Round {round} | Started {startLocal} | Finished {endLocal} | Duration {durationFormatted} | {statusIcon}[/]");
+                        continue;
+                    }
+                }
+
+                // Fallback: show raw line with color coding
                 if (trimmed.Length > 120)
                     trimmed = trimmed[..120] + "…";
-                // Color errors/warnings
-                var color = trimmed.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ? "red" :
+                var fallbackColor = trimmed.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ? "red" :
                            trimmed.Contains("WARN", StringComparison.OrdinalIgnoreCase) ? "yellow" :
                            trimmed.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase) ? "green" :
                            "dim";
-                AnsiConsole.MarkupLine($"  [{color}]{Markup.Escape(trimmed)}[/]");
+                AnsiConsole.MarkupLine($"  [{fallbackColor}]{Markup.Escape(trimmed)}[/]");
             }
         }
     }
