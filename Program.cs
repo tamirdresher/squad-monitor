@@ -363,6 +363,53 @@ static bool IsGhCliAvailable()
     }
 }
 
+static string? GetRepoOwnerAndName(string teamRoot)
+{
+    var json = RunProcess("gh", "repo view --json nameWithOwner", teamRoot);
+    if (json == null) return null;
+    
+    try
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("nameWithOwner", out var prop))
+            return prop.GetString();
+    }
+    catch { }
+    
+    return null;
+}
+
+static string CreateHyperlink(string url, string text)
+{
+    // OSC 8 hyperlink: \e]8;;URL\e\\TEXT\e]8;;\e\\
+    // This works in Windows Terminal, iTerm2, and most modern terminals
+    return $"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\";
+}
+
+static string CreateSpectreLink(string url, string text)
+{
+    // Spectre.Console link markup: [link=URL]text[/]
+    return $"[link={url}]{Markup.Escape(text)}[/]";
+}
+
+static string FormatIssueNumber(int number, string? repoOwnerName)
+{
+    if (repoOwnerName == null)
+        return $"#{number}";
+    
+    var url = $"https://github.com/{repoOwnerName}/issues/{number}";
+    return CreateSpectreLink(url, $"#{number}");
+}
+
+static string FormatPRNumber(int number, string? repoOwnerName)
+{
+    if (repoOwnerName == null)
+        return $"#{number}";
+    
+    var url = $"https://github.com/{repoOwnerName}/pull/{number}";
+    return CreateSpectreLink(url, $"#{number}");
+}
+
 // ─── Section Builders (return IRenderable) ──────────────────────────────────
 
 static IRenderable BuildRalphHeartbeatSection(string userProfile)
@@ -935,6 +982,7 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
     var section = new Rule("[magenta]GitHub Issues (squad)[/]") { Justification = Justify.Left };
     items.Add(section);
 
+    var repoOwnerName = GetRepoOwnerAndName(teamRoot);
     var output = RunProcess("gh", $"issue list --label squad --json number,title,author,createdAt,labels,assignees --limit {maxRows}", teamRoot);
     if (output == null)
     {
@@ -967,7 +1015,8 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
 
         foreach (var issue in issues.EnumerateArray())
         {
-            var number = issue.TryGetProperty("number", out var n) ? n.GetInt32().ToString() : "?";
+            var numberInt = issue.TryGetProperty("number", out var n) ? n.GetInt32() : 0;
+            var number = numberInt > 0 ? numberInt.ToString() : "?";
             var title = issue.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
             var author = issue.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var login) ? login.GetString() ?? "" : "";
             var createdAt = issue.TryGetProperty("createdAt", out var c) && DateTime.TryParse(c.GetString(), out var created) ? FormatAge(DateTime.Now - created.ToLocalTime()) : "?";
@@ -1007,8 +1056,12 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
             if (title.Length > 40)
                 title = title.Substring(0, 37) + "...";
 
+            var numberDisplay = numberInt > 0 && repoOwnerName != null 
+                ? $"[cyan]{FormatIssueNumber(numberInt, repoOwnerName)}[/]"
+                : $"[cyan]{Markup.Escape(number)}[/]";
+
             table.AddRow(
-                $"[cyan]{Markup.Escape(number)}[/]",
+                numberDisplay,
                 Markup.Escape(title),
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(labelsStr)}[/]",
@@ -1035,6 +1088,7 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
     var section = new Rule("[magenta]GitHub Pull Requests (Open)[/]") { Justification = Justify.Left };
     items.Add(section);
 
+    var repoOwnerName = GetRepoOwnerAndName(teamRoot);
     var output = RunProcess("gh", "pr list --json number,title,author,createdAt,headRefName,reviewDecision,statusCheckRollup,isDraft --limit 20", teamRoot);
     if (output == null)
     {
@@ -1068,7 +1122,8 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
 
         foreach (var pr in prs.EnumerateArray())
         {
-            var number = pr.TryGetProperty("number", out var n) ? n.GetInt32().ToString() : "?";
+            var numberInt = pr.TryGetProperty("number", out var n) ? n.GetInt32() : 0;
+            var number = numberInt > 0 ? numberInt.ToString() : "?";
             var title = pr.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
             var author = pr.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var login) ? login.GetString() ?? "" : "";
             var branch = pr.TryGetProperty("headRefName", out var b) ? b.GetString() ?? "" : "";
@@ -1127,8 +1182,12 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
 
             var titleMarkup = isDraft ? $"[dim]{Markup.Escape(title)} (draft)[/]" : Markup.Escape(title);
 
+            var numberDisplay = numberInt > 0 && repoOwnerName != null 
+                ? $"[cyan]{FormatPRNumber(numberInt, repoOwnerName)}[/]"
+                : $"[cyan]{Markup.Escape(number)}[/]";
+
             table.AddRow(
-                $"[cyan]{Markup.Escape(number)}[/]",
+                numberDisplay,
                 titleMarkup,
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
@@ -1156,6 +1215,7 @@ static IRenderable BuildRecentlyMergedPRsSection(string teamRoot)
     var section = new Rule("[magenta]GitHub Pull Requests (Recently Merged)[/]") { Justification = Justify.Left };
     items.Add(section);
 
+    var repoOwnerName = GetRepoOwnerAndName(teamRoot);
     // Get closed PRs from the last 7 days
     var output = RunProcess("gh", "pr list --state merged --limit 10 --json number,title,author,mergedAt,headRefName", teamRoot);
     if (output == null)
@@ -1188,7 +1248,8 @@ static IRenderable BuildRecentlyMergedPRsSection(string teamRoot)
 
         foreach (var pr in prs.EnumerateArray())
         {
-            var number = pr.TryGetProperty("number", out var n) ? n.GetInt32().ToString() : "?";
+            var numberInt = pr.TryGetProperty("number", out var n) ? n.GetInt32() : 0;
+            var number = numberInt > 0 ? numberInt.ToString() : "?";
             var title = pr.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
             var author = pr.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var login) ? login.GetString() ?? "" : "";
             var branch = pr.TryGetProperty("headRefName", out var b) ? b.GetString() ?? "" : "";
@@ -1199,8 +1260,12 @@ static IRenderable BuildRecentlyMergedPRsSection(string teamRoot)
             if (branch.Length > 20)
                 branch = branch.Substring(0, 17) + "...";
 
+            var numberDisplay = numberInt > 0 && repoOwnerName != null 
+                ? $"[green]{FormatPRNumber(numberInt, repoOwnerName)}[/]"
+                : $"[green]{Markup.Escape(number)}[/]";
+
             table.AddRow(
-                $"[green]{Markup.Escape(number)}[/]",
+                numberDisplay,
                 Markup.Escape(title),
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
@@ -2281,6 +2346,7 @@ static void DisplayGitHubIssues(string teamRoot)
     var section = new Rule("[cyan]GitHub Issues (Open)[/]") { Justification = Justify.Left };
     AnsiConsole.Write(section);
 
+    var repoOwnerName = GetRepoOwnerAndName(teamRoot);
     var json = RunProcess("gh", "issue list --state open --label squad --limit 15 --json number,title,labels,assignees,updatedAt", teamRoot);
     if (json == null)
     {
@@ -2335,8 +2401,12 @@ static void DisplayGitHubIssues(string teamRoot)
                              labels.Contains("assigned") || !string.IsNullOrEmpty(assignees) && assignees != "unassigned" ? "blue" :
                              "dim";
 
+            var numberDisplay = repoOwnerName != null 
+                ? $"[white]{FormatIssueNumber(number, repoOwnerName)}[/]"
+                : $"[white]#{number}[/]";
+
             table.AddRow(
-                $"[white]#{number}[/]",
+                numberDisplay,
                 $"[{statusColor}]{Markup.Escape(title)}[/]",
                 $"[dim]{Markup.Escape(labels)}[/]",
                 $"[cyan]{Markup.Escape(assignees)}[/]",
@@ -2361,6 +2431,7 @@ static void DisplayGitHubPRs(string teamRoot)
     var section = new Rule("[cyan]GitHub Pull Requests (Open)[/]") { Justification = Justify.Left };
     AnsiConsole.Write(section);
 
+    var repoOwnerName = GetRepoOwnerAndName(teamRoot);
     var json = RunProcess("gh", "pr list --state open --limit 10 --json number,title,author,reviewDecision,statusCheckRollup,updatedAt,isDraft,headRefName", teamRoot);
     if (json == null)
     {
@@ -2443,8 +2514,12 @@ static void DisplayGitHubPRs(string teamRoot)
                 updatedStr = FormatAge(DateTime.Now - updatedDt.ToLocalTime());
             }
 
+            var numberDisplay = repoOwnerName != null 
+                ? $"[white]{FormatPRNumber(number, repoOwnerName)}[/]"
+                : $"[white]#{number}[/]";
+
             table.AddRow(
-                $"[white]#{number}[/]",
+                numberDisplay,
                 $"[white]{Markup.Escape(title)}[/]",
                 $"[cyan]{Markup.Escape(author)}[/]",
                 reviewDisplay,
@@ -2468,6 +2543,7 @@ static void DisplayRecentlyMergedPRs(string teamRoot)
     var section = new Rule("[cyan]GitHub Pull Requests (Recently Merged)[/]") { Justification = Justify.Left };
     AnsiConsole.Write(section);
 
+    var repoOwnerName = GetRepoOwnerAndName(teamRoot);
     var json = RunProcess("gh", "pr list --state merged --limit 10 --json number,title,author,mergedAt,headRefName", teamRoot);
     if (json == null)
     {
@@ -2515,8 +2591,12 @@ static void DisplayRecentlyMergedPRs(string teamRoot)
                 mergedStr = FormatAge(DateTime.Now - mergedDt.ToLocalTime());
             }
 
+            var numberDisplay = repoOwnerName != null 
+                ? $"[green]{FormatPRNumber(number, repoOwnerName)}[/]"
+                : $"[green]#{number}[/]";
+
             table.AddRow(
-                $"[green]#{number}[/]",
+                numberDisplay,
                 $"[white]{Markup.Escape(title)}[/]",
                 $"[cyan]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
