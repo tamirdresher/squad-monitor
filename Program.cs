@@ -11,6 +11,7 @@ using System.Text.RegularExpressions;
 Console.OutputEncoding = Encoding.UTF8;
 
 var interval = 5;
+var intervalExplicit = false;
 var runOnce = false;
 var orchestrationOnlyMode = false;
 var multiSessionMode = false;
@@ -28,6 +29,7 @@ for (int i = 0; i < args.Length; i++)
     if (args[i] == "--interval" && i + 1 < args.Length && int.TryParse(args[i + 1], out var n))
     {
         interval = n;
+        intervalExplicit = true;
         i++;
     }
     else if (args[i] == "--once")
@@ -64,6 +66,10 @@ for (int i = 0; i < args.Length; i++)
 }
 
 var teamRoot = teamRootArg ?? FindTeamRoot();
+
+// Beta/SharpUI mode defaults to a longer refresh interval to reduce resource usage
+if (useSharpUI && !intervalExplicit)
+    interval = 30;
 
 // If SharpConsoleUI mode is enabled, run the new TUI
 if (useSharpUI)
