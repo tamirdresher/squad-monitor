@@ -309,6 +309,8 @@ public static class SharpUI
         lines.Add("[magenta bold] ── GitHub Issues (squad) ──[/]");
         lines.Add("");
 
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
+
         var issueOutput = RunCmd("gh", "issue list --label squad --json number,title,author,createdAt,assignees --limit 12", teamRoot);
         if (issueOutput == null)
         {
@@ -347,7 +349,9 @@ public static class SharpUI
                         if (author.Length > 12) author = author[..12];
                         var asgnStr = assignees.Count > 0 ? string.Join(",", assignees.Select(x => x.Length > 12 ? x[..12] : x)) : "[dim]none[/]";
 
-                        lines.Add($" [cyan]{Esc(num),-6}[/] {Esc(title),-42} [yellow]{Esc(author),-14}[/] {asgnStr,-14} [dim]{Esc(age),-8}[/]");
+                        var issueLink = !string.IsNullOrEmpty(repoSlug) ? $"[link=https://github.com/{repoSlug}/issues/{num}]" : "";
+                        var issueLinkEnd = !string.IsNullOrEmpty(repoSlug) ? "[/]" : "";
+                        lines.Add($" {issueLink}[cyan]{Esc(num),-6}[/]{issueLinkEnd} {Esc(title),-42} [yellow]{Esc(author),-14}[/] {asgnStr,-14} [dim]{Esc(age),-8}[/]");
                     }
                 }
             }
@@ -411,7 +415,9 @@ public static class SharpUI
                             _ => isDraft ? "📝 Draft" : "—"
                         };
 
-                        lines.Add($" [cyan]{Esc(num),-6}[/] {Esc(title),-38} [yellow]{Esc(author),-14}[/] [dim]{Esc(branch),-22}[/] [{reviewColor}]{reviewDisplay,-10}[/] [dim]{Esc(age),-8}[/]");
+                        var prLink = !string.IsNullOrEmpty(repoSlug) ? $"[link=https://github.com/{repoSlug}/pull/{num}]" : "";
+                        var prLinkEnd = !string.IsNullOrEmpty(repoSlug) ? "[/]" : "";
+                        lines.Add($" {prLink}[cyan]{Esc(num),-6}[/]{prLinkEnd} {Esc(title),-38} [yellow]{Esc(author),-14}[/] [dim]{Esc(branch),-22}[/] [{reviewColor}]{reviewDisplay,-10}[/] [dim]{Esc(age),-8}[/]");
                     }
                 }
             }
@@ -1268,6 +1274,33 @@ public static class SharpUI
             return proc.ExitCode == 0 ? output : null;
         }
         catch { return null; }
+    }
+
+    // ─── GitHub Clickable Hyperlinks ────────────────────────────────────────
+
+    private static string? _cachedRepoSlug;
+    private static bool _repoSlugFetched;
+
+    private static string? GetGitHubRepoSlug(string? teamRoot)
+    {
+        if (_repoSlugFetched) return _cachedRepoSlug;
+        _repoSlugFetched = true;
+        _cachedRepoSlug = RunCmd("gh", "repo view --json nameWithOwner -q .nameWithOwner", teamRoot)?.Trim();
+        return _cachedRepoSlug;
+    }
+
+    private static string FormatLinkedIssueNumber(string number, string color, string? repoSlug)
+    {
+        if (!string.IsNullOrEmpty(repoSlug))
+            return $"[link=https://github.com/{repoSlug}/issues/{number}][{color}]{Esc(number)}[/][/]";
+        return $"[{color}]{Esc(number)}[/]";
+    }
+
+    private static string FormatLinkedPrNumber(string number, string color, string? repoSlug)
+    {
+        if (!string.IsNullOrEmpty(repoSlug))
+            return $"[link=https://github.com/{repoSlug}/pull/{number}][{color}]{Esc(number)}[/][/]";
+        return $"[{color}]{Esc(number)}[/]";
     }
 
     private static bool IsGhCliAvailable()

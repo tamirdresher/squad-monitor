@@ -399,6 +399,32 @@ static string? RunProcess(string fileName, string arguments, string? workingDire
     }
 }
 
+// ─── GitHub Clickable Hyperlinks ────────────────────────────────────────────
+
+static string? GetGitHubRepoSlug(string? teamRoot)
+{
+    if (GitHubLinkCache.Fetched) return GitHubLinkCache.RepoSlug;
+    GitHubLinkCache.Fetched = true;
+    GitHubLinkCache.RepoSlug = RunProcess("gh", "repo view --json nameWithOwner -q .nameWithOwner", teamRoot)?.Trim();
+    return GitHubLinkCache.RepoSlug;
+}
+
+static string FormatLinkedIssueNumber(string number, string color, string? repoSlug, bool includeHash = false)
+{
+    var displayText = includeHash ? $"#{Markup.Escape(number)}" : Markup.Escape(number);
+    if (!string.IsNullOrEmpty(repoSlug))
+        return $"[link=https://github.com/{repoSlug}/issues/{number}][{color}]{displayText}[/][/]";
+    return $"[{color}]{displayText}[/]";
+}
+
+static string FormatLinkedPrNumber(string number, string color, string? repoSlug, bool includeHash = false)
+{
+    var displayText = includeHash ? $"#{Markup.Escape(number)}" : Markup.Escape(number);
+    if (!string.IsNullOrEmpty(repoSlug))
+        return $"[link=https://github.com/{repoSlug}/pull/{number}][{color}]{displayText}[/][/]";
+    return $"[{color}]{displayText}[/]";
+}
+
 static bool IsGhCliAvailable()
 {
     try
@@ -1032,6 +1058,8 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
             return new Rows(items);
         }
 
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
+
         var table = new Table()
             .BorderColor(Color.Grey)
             .Border(TableBorder.Rounded)
@@ -1085,7 +1113,7 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
                 title = title.Substring(0, 37) + "...";
 
             table.AddRow(
-                $"[cyan]{Markup.Escape(number)}[/]",
+                FormatLinkedIssueNumber(number, "cyan", repoSlug),
                 Markup.Escape(title),
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(labelsStr)}[/]",
@@ -1131,6 +1159,8 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
             items.Add(Text.Empty);
             return new Rows(items);
         }
+
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
 
         var table = new Table()
             .BorderColor(Color.Grey)
@@ -1205,7 +1235,7 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
             var titleMarkup = isDraft ? $"[dim]{Markup.Escape(title)} (draft)[/]" : Markup.Escape(title);
 
             table.AddRow(
-                $"[cyan]{Markup.Escape(number)}[/]",
+                FormatLinkedPrNumber(number, "cyan", repoSlug),
                 titleMarkup,
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
@@ -1254,6 +1284,8 @@ static IRenderable BuildRecentlyMergedPRsSection(string teamRoot)
             return new Rows(items);
         }
 
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
+
         var table = new Table()
             .BorderColor(Color.Grey)
             .Border(TableBorder.Rounded)
@@ -1277,7 +1309,7 @@ static IRenderable BuildRecentlyMergedPRsSection(string teamRoot)
                 branch = branch.Substring(0, 17) + "...";
 
             table.AddRow(
-                $"[green]{Markup.Escape(number)}[/]",
+                FormatLinkedPrNumber(number, "green", repoSlug),
                 Markup.Escape(title),
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
@@ -2412,6 +2444,8 @@ static void DisplayGitHubIssues(string teamRoot)
             return;
         }
 
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
+
         var table = new Table();
         table.Border(TableBorder.Simple);
         table.AddColumn(new TableColumn("[bold]#[/]").RightAligned());
@@ -2447,7 +2481,7 @@ static void DisplayGitHubIssues(string teamRoot)
                              "dim";
 
             table.AddRow(
-                $"[white]#{number}[/]",
+                FormatLinkedIssueNumber(number.ToString(), "white", repoSlug, includeHash: true),
                 $"[{statusColor}]{Markup.Escape(title)}[/]",
                 $"[dim]{Markup.Escape(labels)}[/]",
                 $"[cyan]{Markup.Escape(assignees)}[/]",
@@ -2491,6 +2525,8 @@ static void DisplayGitHubPRs(string teamRoot)
             AnsiConsole.WriteLine();
             return;
         }
+
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
 
         var table = new Table();
         table.Border(TableBorder.Simple);
@@ -2555,7 +2591,7 @@ static void DisplayGitHubPRs(string teamRoot)
             }
 
             table.AddRow(
-                $"[white]#{number}[/]",
+                FormatLinkedPrNumber(number.ToString(), "white", repoSlug, includeHash: true),
                 $"[white]{Markup.Escape(title)}[/]",
                 $"[cyan]{Markup.Escape(author)}[/]",
                 reviewDisplay,
@@ -2599,6 +2635,8 @@ static void DisplayRecentlyMergedPRs(string teamRoot)
             return;
         }
 
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
+
         var table = new Table();
         table.Border(TableBorder.Simple);
         table.AddColumn(new TableColumn("[bold]#[/]").RightAligned());
@@ -2627,7 +2665,7 @@ static void DisplayRecentlyMergedPRs(string teamRoot)
             }
 
             table.AddRow(
-                $"[green]#{number}[/]",
+                FormatLinkedPrNumber(number.ToString(), "green", repoSlug, includeHash: true),
                 $"[white]{Markup.Escape(title)}[/]",
                 $"[cyan]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
@@ -2842,4 +2880,10 @@ class ModelCallStats
     public long CachedTokens { get; set; }
     public double TotalCost { get; set; }
     public List<long> DurationsMs { get; set; } = new();
+}
+
+static class GitHubLinkCache
+{
+    public static string? RepoSlug;
+    public static bool Fetched;
 }
