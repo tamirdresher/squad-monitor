@@ -11,13 +11,17 @@ using System.Text.RegularExpressions;
 Console.OutputEncoding = Encoding.UTF8;
 
 var interval = 5;
+var intervalExplicit = false;
 var runOnce = false;
 var orchestrationOnlyMode = false;
 var multiSessionMode = false;
 var disableGitHub = false;
 var useSharpUI = false;
 var sessionWindowMinutes = 30;
-var teamRoot = FindTeamRoot();
+var feedLines = 15; // default cap for live agent feed entries
+var feedScrollOffset = 0; // how far back from latest entries the user has scrolled
+var previousFeedEntryCount = 0; // tracks entry count for auto-reset on new arrivals
+string? teamRootArg = null;
 var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
 for (int i = 0; i < args.Length; i++)
@@ -25,6 +29,7 @@ for (int i = 0; i < args.Length; i++)
     if (args[i] == "--interval" && i + 1 < args.Length && int.TryParse(args[i + 1], out var n))
     {
         interval = n;
+        intervalExplicit = true;
         i++;
     }
     else if (args[i] == "--once")
@@ -48,7 +53,23 @@ for (int i = 0; i < args.Length; i++)
         sessionWindowMinutes = sw;
         i++;
     }
+    else if (args[i] == "--feed-lines" && i + 1 < args.Length && int.TryParse(args[i + 1], out var fl))
+    {
+        feedLines = fl;
+        i++;
+    }
+    else if (args[i] == "--team-root" && i + 1 < args.Length)
+    {
+        teamRootArg = args[i + 1];
+        i++;
+    }
 }
+
+var teamRoot = teamRootArg ?? FindTeamRoot();
+
+// Beta/SharpUI mode defaults to a longer refresh interval to reduce resource usage
+if (useSharpUI && !intervalExplicit)
+    interval = 30;
 
 // If SharpConsoleUI mode is enabled, run the new TUI
 if (useSharpUI)
@@ -76,8 +97,10 @@ if (disableGitHub)
     AnsiConsole.MarkupLine($"[dim]GitHub integration: disabled (gh CLI not available)[/]");
 }
 AnsiConsole.MarkupLine($"[dim]Press 'o' to toggle orchestration view | 'm' to toggle multi-session view[/]");
+AnsiConsole.MarkupLine($"[dim]Use ↑↓ to scroll feed history | Home/End to jump | arrow keys work in live mode[/]");
 AnsiConsole.MarkupLine($"[dim]Use --multi-session (-m) for focused session view | --session-window <min> to set scan window (default 30)[/]");
-AnsiConsole.MarkupLine($"[dim]Use --sharp-ui or --beta to try the new SharpConsoleUI interface[/]");
+AnsiConsole.MarkupLine($"[dim]Use --team-root <path> to specify team root | --sharp-ui or --beta for SharpConsoleUI[/]");
+AnsiConsole.MarkupLine($"[dim]Use --feed-lines <N> to cap live agent feed entries (default 15, multi-session default 80)[/]");
 AnsiConsole.WriteLine();
 
 if (runOnce)
@@ -118,7 +141,7 @@ if (runOnce)
         DisplayOrchestrationLog(activities);
         
         // Live Agent Feed
-        var liveAgentFeed = BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes);
+        var (liveAgentFeed, _) = BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes, feedLimit: feedLines);
         AnsiConsole.Write(liveAgentFeed);
     }
 }
@@ -147,17 +170,54 @@ else
                         multiSessionMode = !multiSessionMode;
                         if (multiSessionMode) orchestrationOnlyMode = false;
                     }
+                    else if (key.Key == ConsoleKey.UpArrow)
+                    {
+                        feedScrollOffset = Math.Min(feedScrollOffset + 1, Math.Max(0, previousFeedEntryCount - feedLines));
+                    }
+                    else if (key.Key == ConsoleKey.DownArrow)
+                    {
+                        feedScrollOffset = Math.Max(0, feedScrollOffset - 1);
+                    }
+                    else if (key.Key == ConsoleKey.Home)
+                    {
+                        feedScrollOffset = Math.Max(0, previousFeedEntryCount - feedLines);
+                    }
+                    else if (key.Key == ConsoleKey.End)
+                    {
+                        feedScrollOffset = 0;
+                    }
                 }
 
                 // Clear the console before each render to prevent stacking
                 AnsiConsole.Clear();
 
                 var now = DateTime.Now;
-                var content = multiSessionMode
-                    ? BuildMultiSessionContent(now, userProfile, sessionWindowMinutes)
-                    : orchestrationOnlyMode 
-                        ? BuildOrchestrationOnlyContent(now, userProfile, teamRoot)
-                        : BuildDashboardContent(now, userProfile, teamRoot, disableGitHub, sessionWindowMinutes);
+                IRenderable content;
+                int totalFeedEntries = 0;
+
+                if (multiSessionMode)
+                {
+                    content = BuildMultiSessionContent(now, userProfile, sessionWindowMinutes);
+                }
+                else if (orchestrationOnlyMode)
+                {
+                    content = BuildOrchestrationOnlyContent(now, userProfile, teamRoot);
+                }
+                else
+                {
+                    var (dashContent, feedTotal) = BuildDashboardContent(now, userProfile, teamRoot, disableGitHub, sessionWindowMinutes, feedLines, feedScrollOffset);
+                    content = dashContent;
+                    totalFeedEntries = feedTotal;
+                }
+
+                // Auto-reset scroll offset when new entries arrive
+                if (totalFeedEntries > 0 && totalFeedEntries != previousFeedEntryCount)
+                {
+                    previousFeedEntryCount = totalFeedEntries;
+                    if (feedScrollOffset > 0)
+                        feedScrollOffset = 0;
+                }
+
                 layout.Update(content);
                 ctx.Refresh();
 
@@ -171,7 +231,7 @@ return 0;
 
 // ─── Dashboard Content Builder ─────────────────────────────────────────────
 
-static IRenderable BuildDashboardContent(DateTime now, string userProfile, string teamRoot, bool disableGitHub, int sessionWindowMinutes)
+static (IRenderable content, int totalFeedEntries) BuildDashboardContent(DateTime now, string userProfile, string teamRoot, bool disableGitHub, int sessionWindowMinutes, int feedLines = 15, int feedScrollOffset = 0)
 {
     var sections = new List<IRenderable>();
 
@@ -198,7 +258,8 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
     sections.Add(Text.Empty);
 
     // Live Agent Activity (tails agency/copilot logs) — top priority visibility
-    sections.Add(BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes));
+    var (feedContent, totalFeedEntries) = BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes, feedLimit: feedLines, feedScrollOffset: feedScrollOffset);
+    sections.Add(feedContent);
 
     // Token Usage & Model Stats
     sections.Add(BuildTokenStatsSection(userProfile));
@@ -228,7 +289,7 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
 
     // Combine all sections into a group
     var rows = new Rows(sections);
-    return rows;
+    return (rows, totalFeedEntries);
 }
 
 // ─── Orchestration-Only Dashboard Builder ──────────────────────────────────
@@ -274,7 +335,8 @@ static IRenderable BuildMultiSessionContent(DateTime now, string userProfile, in
     sections.Add(Text.Empty);
 
     // Full multi-session view with expanded feed (80 entries vs 30)
-    sections.Add(BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes, expandedFeed: true));
+    var (multiSessionFeed, _) = BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes, expandedFeed: true);
+    sections.Add(multiSessionFeed);
 
     return new Rows(sections);
 }
@@ -335,6 +397,32 @@ static string? RunProcess(string fileName, string arguments, string? workingDire
     {
         return null;
     }
+}
+
+// ─── GitHub Clickable Hyperlinks ────────────────────────────────────────────
+
+static string? GetGitHubRepoSlug(string? teamRoot)
+{
+    if (GitHubLinkCache.Fetched) return GitHubLinkCache.RepoSlug;
+    GitHubLinkCache.Fetched = true;
+    GitHubLinkCache.RepoSlug = RunProcess("gh", "repo view --json nameWithOwner -q .nameWithOwner", teamRoot)?.Trim();
+    return GitHubLinkCache.RepoSlug;
+}
+
+static string FormatLinkedIssueNumber(string number, string color, string? repoSlug, bool includeHash = false)
+{
+    var displayText = includeHash ? $"#{Markup.Escape(number)}" : Markup.Escape(number);
+    if (!string.IsNullOrEmpty(repoSlug))
+        return $"[link=https://github.com/{repoSlug}/issues/{number}][{color}]{displayText}[/][/]";
+    return $"[{color}]{displayText}[/]";
+}
+
+static string FormatLinkedPrNumber(string number, string color, string? repoSlug, bool includeHash = false)
+{
+    var displayText = includeHash ? $"#{Markup.Escape(number)}" : Markup.Escape(number);
+    if (!string.IsNullOrEmpty(repoSlug))
+        return $"[link=https://github.com/{repoSlug}/pull/{number}][{color}]{displayText}[/][/]";
+    return $"[{color}]{displayText}[/]";
 }
 
 static bool IsGhCliAvailable()
@@ -593,6 +681,21 @@ static IRenderable BuildTokenStatsSection(string userProfile)
             .OrderByDescending(f => f.LastWriteTime)
             .Take(5)
             .ToList();
+
+        // Also include agency session process logs (~/.agency/logs/session_*/process-*.log)
+        // which contain the bulk of assistant_usage events for active sessions
+        var agencyLogDir = Path.Combine(userProfile, ".agency", "logs");
+        if (Directory.Exists(agencyLogDir))
+        {
+            var agencyProcessLogs = new DirectoryInfo(agencyLogDir)
+                .GetDirectories()
+                .SelectMany(d => d.GetFiles("process-*.log"))
+                .Where(f => f.Length > 0)
+                .OrderByDescending(f => f.LastWriteTime)
+                .Take(10)
+                .ToList();
+            logFiles.AddRange(agencyProcessLogs);
+        }
 
         if (!logFiles.Any())
         {
@@ -955,6 +1058,8 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
             return new Rows(items);
         }
 
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
+
         var table = new Table()
             .BorderColor(Color.Grey)
             .Border(TableBorder.Rounded)
@@ -1008,7 +1113,7 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
                 title = title.Substring(0, 37) + "...";
 
             table.AddRow(
-                $"[cyan]{Markup.Escape(number)}[/]",
+                FormatLinkedIssueNumber(number, "cyan", repoSlug),
                 Markup.Escape(title),
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(labelsStr)}[/]",
@@ -1054,6 +1159,8 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
             items.Add(Text.Empty);
             return new Rows(items);
         }
+
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
 
         var table = new Table()
             .BorderColor(Color.Grey)
@@ -1128,7 +1235,7 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
             var titleMarkup = isDraft ? $"[dim]{Markup.Escape(title)} (draft)[/]" : Markup.Escape(title);
 
             table.AddRow(
-                $"[cyan]{Markup.Escape(number)}[/]",
+                FormatLinkedPrNumber(number, "cyan", repoSlug),
                 titleMarkup,
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
@@ -1177,6 +1284,8 @@ static IRenderable BuildRecentlyMergedPRsSection(string teamRoot)
             return new Rows(items);
         }
 
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
+
         var table = new Table()
             .BorderColor(Color.Grey)
             .Border(TableBorder.Rounded)
@@ -1200,7 +1309,7 @@ static IRenderable BuildRecentlyMergedPRsSection(string teamRoot)
                 branch = branch.Substring(0, 17) + "...";
 
             table.AddRow(
-                $"[green]{Markup.Escape(number)}[/]",
+                FormatLinkedPrNumber(number, "green", repoSlug),
                 Markup.Escape(title),
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
@@ -1368,9 +1477,10 @@ static IRenderable BuildDetailedOrchestrationSection(List<AgentActivity> activit
 
 // ─── Live Agent Feed Section (Multi-Session) ────────────────────────────────
 
-static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWindowMinutes = 30, bool expandedFeed = false)
+static (IRenderable content, int totalEntries) BuildLiveAgentFeedSection(string userProfile, int sessionWindowMinutes = 30, bool expandedFeed = false, int feedLimit = 15, int feedScrollOffset = 0)
 {
     var items = new List<IRenderable>();
+    var feedEntryCount = 0;
     var section = new Rule("[green bold]Live Agent Feed — Multi-Session View[/]") { Justification = Justify.Left };
     items.Add(section);
 
@@ -1386,7 +1496,17 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
         {
             var agencySessions = new DirectoryInfo(agencyLogDir)
                 .GetDirectories()
-                .Where(d => (now - d.LastWriteTime).TotalMinutes <= sessionWindowMinutes)
+                .Where(d =>
+                {
+                    // Check directory LastWriteTime first (fast path)
+                    if ((now - d.LastWriteTime).TotalMinutes <= sessionWindowMinutes)
+                        return true;
+                    // Fallback: directory LastWriteTime is unreliable on Windows — it doesn't
+                    // update when files inside are modified, only on create/delete. Check the
+                    // most recent file's write time instead.
+                    var newestFile = d.GetFiles().OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
+                    return newestFile != null && (now - newestFile.LastWriteTime).TotalMinutes <= sessionWindowMinutes;
+                })
                 .ToList();
 
             foreach (var sessionDir in agencySessions)
@@ -1486,7 +1606,13 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
             // Also scan copilot session subdirectories (e.g., session dirs with events.jsonl)
             var copilotSessionDirs = new DirectoryInfo(copilotLogDir)
                 .GetDirectories()
-                .Where(d => (now - d.LastWriteTime).TotalMinutes <= sessionWindowMinutes)
+                .Where(d =>
+                {
+                    if ((now - d.LastWriteTime).TotalMinutes <= sessionWindowMinutes)
+                        return true;
+                    var newestFile = d.GetFiles().OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
+                    return newestFile != null && (now - newestFile.LastWriteTime).TotalMinutes <= sessionWindowMinutes;
+                })
                 .ToList();
 
             foreach (var sessionDir in copilotSessionDirs)
@@ -1593,19 +1719,36 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
         {
             items.Add(new Markup($"[dim]  No active sessions found in the last {sessionWindowMinutes} minutes[/]"));
             items.Add(Text.Empty);
-            return new Rows(items);
+            return (new Rows(items), 0);
         }
 
         // Merged Activity Feed
+        feedEntryCount = allFeedEntries.Count;
         if (allFeedEntries.Count > 0)
         {
-            var feedLimit = expandedFeed ? 80 : 30;
-            var recentEntries = allFeedEntries
-                .OrderBy(e => e.TimeValue)
-                .TakeLast(feedLimit)
+            var effectiveFeedLimit = expandedFeed ? 80 : feedLimit;
+            var sortedEntries = allFeedEntries.OrderBy(e => e.TimeValue).ToList();
+            var totalEntries = sortedEntries.Count;
+
+            // Clamp scroll offset to valid range
+            var maxOffset = Math.Max(0, totalEntries - effectiveFeedLimit);
+            var clampedOffset = Math.Min(feedScrollOffset, maxOffset);
+
+            // Slice the window based on scroll offset
+            var startIndex = Math.Max(0, totalEntries - effectiveFeedLimit - clampedOffset);
+            var recentEntries = sortedEntries
+                .Skip(startIndex)
+                .Take(effectiveFeedLimit)
                 .ToList();
 
-            items.Add(new Markup($"[bold]Merged Activity Feed (last {recentEntries.Count} of {allFeedEntries.Count} entries):[/]"));
+            var endEntry = totalEntries - clampedOffset;
+            var startEntry = endEntry - recentEntries.Count + 1;
+
+            // Header with scroll position and live/paused indicator
+            var scrollIndicator = clampedOffset > 0
+                ? "[dim]⏸ Paused at history — press End for live[/]"
+                : "[green]▶ Live[/]";
+            items.Add(new Markup($"[bold]Merged Activity Feed (entries {startEntry}-{endEntry} of {totalEntries})[/] [dim][[↑↓ scroll]][/]  {scrollIndicator}"));
             items.Add(Text.Empty);
 
             var activityTable = new Table()
@@ -1644,7 +1787,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
     }
 
     items.Add(Text.Empty);
-    return new Rows(items);
+    return (new Rows(items), feedEntryCount);
 }
 
 // ─── Helper Methods for Multi-Session View ─────────────────────
@@ -2301,6 +2444,8 @@ static void DisplayGitHubIssues(string teamRoot)
             return;
         }
 
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
+
         var table = new Table();
         table.Border(TableBorder.Simple);
         table.AddColumn(new TableColumn("[bold]#[/]").RightAligned());
@@ -2336,7 +2481,7 @@ static void DisplayGitHubIssues(string teamRoot)
                              "dim";
 
             table.AddRow(
-                $"[white]#{number}[/]",
+                FormatLinkedIssueNumber(number.ToString(), "white", repoSlug, includeHash: true),
                 $"[{statusColor}]{Markup.Escape(title)}[/]",
                 $"[dim]{Markup.Escape(labels)}[/]",
                 $"[cyan]{Markup.Escape(assignees)}[/]",
@@ -2380,6 +2525,8 @@ static void DisplayGitHubPRs(string teamRoot)
             AnsiConsole.WriteLine();
             return;
         }
+
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
 
         var table = new Table();
         table.Border(TableBorder.Simple);
@@ -2444,7 +2591,7 @@ static void DisplayGitHubPRs(string teamRoot)
             }
 
             table.AddRow(
-                $"[white]#{number}[/]",
+                FormatLinkedPrNumber(number.ToString(), "white", repoSlug, includeHash: true),
                 $"[white]{Markup.Escape(title)}[/]",
                 $"[cyan]{Markup.Escape(author)}[/]",
                 reviewDisplay,
@@ -2488,6 +2635,8 @@ static void DisplayRecentlyMergedPRs(string teamRoot)
             return;
         }
 
+        var repoSlug = GetGitHubRepoSlug(teamRoot);
+
         var table = new Table();
         table.Border(TableBorder.Simple);
         table.AddColumn(new TableColumn("[bold]#[/]").RightAligned());
@@ -2516,7 +2665,7 @@ static void DisplayRecentlyMergedPRs(string teamRoot)
             }
 
             table.AddRow(
-                $"[green]#{number}[/]",
+                FormatLinkedPrNumber(number.ToString(), "green", repoSlug, includeHash: true),
                 $"[white]{Markup.Escape(title)}[/]",
                 $"[cyan]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
@@ -2731,4 +2880,10 @@ class ModelCallStats
     public long CachedTokens { get; set; }
     public double TotalCost { get; set; }
     public List<long> DurationsMs { get; set; } = new();
+}
+
+static class GitHubLinkCache
+{
+    public static string? RepoSlug;
+    public static bool Fetched;
 }
