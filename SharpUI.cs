@@ -349,9 +349,8 @@ public static class SharpUI
                         if (author.Length > 12) author = author[..12];
                         var asgnStr = assignees.Count > 0 ? string.Join(",", assignees.Select(x => x.Length > 12 ? x[..12] : x)) : "[dim]none[/]";
 
-                        var issueLink = !string.IsNullOrEmpty(repoSlug) ? $"[link=https://github.com/{repoSlug}/issues/{num}]" : "";
-                        var issueLinkEnd = !string.IsNullOrEmpty(repoSlug) ? "[/]" : "";
-                        lines.Add($" {issueLink}[cyan]{Esc(num),-6}[/]{issueLinkEnd} {Esc(title),-42} [yellow]{Esc(author),-14}[/] {asgnStr,-14} [dim]{Esc(age),-8}[/]");
+                        var numDisplay = FormatLinkedIssueNumber(num, "cyan", repoSlug);
+                        lines.Add($" {numDisplay,-6} {Esc(title),-42} [yellow]{Esc(author),-14}[/] {asgnStr,-14} [dim]{Esc(age),-8}[/]");
                     }
                 }
             }
@@ -415,9 +414,8 @@ public static class SharpUI
                             _ => isDraft ? "📝 Draft" : "—"
                         };
 
-                        var prLink = !string.IsNullOrEmpty(repoSlug) ? $"[link=https://github.com/{repoSlug}/pull/{num}]" : "";
-                        var prLinkEnd = !string.IsNullOrEmpty(repoSlug) ? "[/]" : "";
-                        lines.Add($" {prLink}[cyan]{Esc(num),-6}[/]{prLinkEnd} {Esc(title),-38} [yellow]{Esc(author),-14}[/] [dim]{Esc(branch),-22}[/] [{reviewColor}]{reviewDisplay,-10}[/] [dim]{Esc(age),-8}[/]");
+                        var numDisplay = FormatLinkedPrNumber(num, "cyan", repoSlug);
+                        lines.Add($" {numDisplay,-6} {Esc(title),-38} [yellow]{Esc(author),-14}[/] [dim]{Esc(branch),-22}[/] [{reviewColor}]{reviewDisplay,-10}[/] [dim]{Esc(age),-8}[/]");
                     }
                 }
             }
@@ -1276,7 +1274,7 @@ public static class SharpUI
         catch { return null; }
     }
 
-    // ─── GitHub Clickable Hyperlinks ────────────────────────────────────────
+    // ─── GitHub Clickable Hyperlinks (OSC 8) ─────────────────────────────────
 
     private static string? _cachedRepoSlug;
     private static bool _repoSlugFetched;
@@ -1289,18 +1287,27 @@ public static class SharpUI
         return _cachedRepoSlug;
     }
 
+    /// <summary>
+    /// Wraps display text in an OSC 8 terminal hyperlink escape sequence.
+    /// Supported by Windows Terminal, iTerm2, and other modern terminals.
+    /// </summary>
+    private static string Hyperlink(string url, string text) =>
+        $"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\";
+
     private static string FormatLinkedIssueNumber(string number, string color, string? repoSlug)
     {
+        var display = $"#{Esc(number)}";
         if (!string.IsNullOrEmpty(repoSlug))
-            return $"[link=https://github.com/{repoSlug}/issues/{number}][{color}]{Esc(number)}[/][/]";
-        return $"[{color}]{Esc(number)}[/]";
+            return $"[link=https://github.com/{repoSlug}/issues/{number}][{color}]{display}[/][/]";
+        return $"[{color}]{display}[/]";
     }
 
     private static string FormatLinkedPrNumber(string number, string color, string? repoSlug)
     {
+        var display = $"#{Esc(number)}";
         if (!string.IsNullOrEmpty(repoSlug))
-            return $"[link=https://github.com/{repoSlug}/pull/{number}][{color}]{Esc(number)}[/][/]";
-        return $"[{color}]{Esc(number)}[/]";
+            return $"[link=https://github.com/{repoSlug}/pull/{number}][{color}]{display}[/][/]";
+        return $"[{color}]{display}[/]";
     }
 
     private static bool IsGhCliAvailable()
