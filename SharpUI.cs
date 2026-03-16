@@ -1298,7 +1298,10 @@ public static class SharpUI
     {
         var display = $"#{Esc(number)}";
         if (!string.IsNullOrEmpty(repoSlug))
-            return $"[link=https://github.com/{repoSlug}/issues/{number}][{color}]{display}[/][/]";
+        {
+            var url = $"https://github.com/{repoSlug}/issues/{number}";
+            return $"[{color}]{Hyperlink(url, display)}[/]";
+        }
         return $"[{color}]{display}[/]";
     }
 
@@ -1306,7 +1309,10 @@ public static class SharpUI
     {
         var display = $"#{Esc(number)}";
         if (!string.IsNullOrEmpty(repoSlug))
-            return $"[link=https://github.com/{repoSlug}/pull/{number}][{color}]{display}[/][/]";
+        {
+            var url = $"https://github.com/{repoSlug}/pull/{number}";
+            return $"[{color}]{Hyperlink(url, display)}[/]";
+        }
         return $"[{color}]{display}[/]";
     }
 
