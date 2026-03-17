@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g., 1.2.0)'
+        description: 'Version to publish (e.g., 1.2.0 or 1.2.0-preview.1)'
         required: true
         type: string
 
@@ -36,15 +36,32 @@ jobs:
     - name: Build
       run: dotnet build squad-monitor.csproj --configuration Release --no-restore
 
-    # Derive package version from the release tag or manual input
+    - name: Extract version from .csproj
+      id: csproj_version
+      run: |
+        VERSION_PREFIX=$(grep -oPm1 '(?<=<VersionPrefix>)[^<]+' squad-monitor.csproj)
+        echo "version_prefix=$VERSION_PREFIX" >> "$GITHUB_OUTPUT"
+        echo "📦 .csproj VersionPrefix: $VERSION_PREFIX"
+
+    # Derive package version from the release tag, manual input, or .csproj
     - name: Determine version
+      id: version
       run: |
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "PACKAGE_VERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+          PACKAGE_VERSION="${{ github.event.inputs.version }}"
         elif [ "${{ github.event_name }}" = "release" ]; then
           TAG="${{ github.event.release.tag_name }}"
-          echo "PACKAGE_VERSION=${TAG#v}" >> $GITHUB_ENV
+          PACKAGE_VERSION="${TAG#v}"
         fi
+
+        IS_PRERELEASE=false
+        if [[ "$PACKAGE_VERSION" == *"-"* ]]; then
+          IS_PRERELEASE=true
+        fi
+
+        echo "PACKAGE_VERSION=$PACKAGE_VERSION" >> $GITHUB_ENV
+        echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+        echo "📦 Publishing version: $PACKAGE_VERSION (pre-release: $IS_PRERELEASE)"
 
     - name: Pack NuGet package
       run: dotnet pack squad-monitor.csproj --configuration Release --no-build --output nupkg /p:PackageVersion=${{ env.PACKAGE_VERSION }}
@@ -56,8 +73,14 @@ jobs:
         path: nupkg/*.nupkg
         retention-days: 30
 
-    - name: Publish to NuGet
+    - name: Publish to NuGet.org
+      if: env.HAS_NUGET_KEY == 'true'
       run: dotnet nuget push nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+      env:
+        HAS_NUGET_KEY: ${{ secrets.NUGET_API_KEY != '' }}
+
+    - name: Publish to GitHub Packages
+      run: dotnet nuget push nupkg/*.nupkg --api-key ${{ secrets.GITHUB_TOKEN }} --source https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json --skip-duplicate
 
     # Attach the .nupkg to the GitHub Release for direct download
     - name: Attach package to GitHub Release
