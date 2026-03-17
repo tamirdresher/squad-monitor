@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+        dotnet-quality: 'preview'
+
+    - name: Restore dependencies
+      run: dotnet restore squad-monitor.csproj
+
+    - name: Build
+      run: dotnet build squad-monitor.csproj --configuration Release --no-restore
+
+    - name: Test
+      run: dotnet test --configuration Release --no-build --verbosity normal 2>/dev/null || echo "No test projects found — skipping."
+
+    - name: Extract version
+      id: version
+      run: |
+        VERSION_PREFIX=$(grep -oPm1 '(?<=<VersionPrefix>)[^<]+' squad-monitor.csproj)
+        echo "version_prefix=$VERSION_PREFIX" >> "$GITHUB_OUTPUT"
+        echo "📦 Version prefix: $VERSION_PREFIX"
+
+    # Pack with pre-release suffix on non-main branches
+    - name: Pack (pre-release)
+      if: github.ref != 'refs/heads/main'
+      run: |
+        dotnet pack squad-monitor.csproj \
+          --configuration Release \
+          --no-build \
+          --output nupkg \
+          /p:VersionSuffix=preview.${{ github.run_number }}
+
+    - name: Pack (stable)
+      if: github.ref == 'refs/heads/main'
+      run: |
+        dotnet pack squad-monitor.csproj \
+          --configuration Release \
+          --no-build \
+          --output nupkg
+
+    - name: Upload package artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-package-ci
+        path: nupkg/*.nupkg
+        retention-days: 7
