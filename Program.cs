@@ -16,7 +16,7 @@ try { _ = Console.CursorVisible; }
 catch (IOException)
 {
     // Re-attach to a console if we don't have one (e.g., Start-Process from another PS)
-    // Force Spectre to use a plain console backend
+    // Force Spectre to use a plain console backend when no real console is attached
     Environment.SetEnvironmentVariable("NO_COLOR", "1");
 }
 
@@ -144,6 +144,7 @@ else
     if (!isInteractive)
     {
         // Fallback: simple loop with Clear + Write (no Live renderer)
+        // This avoids the "The handle is invalid" IOException from Spectre.Console.Live
         while (true)
         {
             try { AnsiConsole.Clear(); } catch { /* ignore */ }
@@ -165,6 +166,8 @@ else
             }
             var activities = LoadActivities(teamRoot);
             DisplayOrchestrationLog(activities);
+            var liveAgentFeed = BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes);
+            AnsiConsole.Write(liveAgentFeed);
             await Task.Delay(interval * 1000);
         }
     }
