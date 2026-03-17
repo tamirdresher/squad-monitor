@@ -10,6 +10,15 @@ using System.Text.RegularExpressions;
 // Ensure emoji and Unicode render correctly on Windows console
 Console.OutputEncoding = Encoding.UTF8;
 
+// Fix for "The handle is invalid" when launched from non-interactive contexts
+// Spectre.Console tries to set CursorVisible which fails without a real console
+try { _ = Console.CursorVisible; }
+catch (IOException)
+{
+    // Force Spectre to use a plain console backend when no real console is attached
+    Environment.SetEnvironmentVariable("NO_COLOR", "1");
+}
+
 var interval = 5;
 var intervalExplicit = false;
 var runOnce = false;
@@ -148,6 +157,42 @@ if (runOnce)
 else
 {
     // Live mode: use AnsiConsole.Live() for flicker-free updates
+    // Detect if we have a real interactive console (needed for cursor control + keyboard)
+    bool isInteractive = !Console.IsInputRedirected && !Console.IsOutputRedirected;
+    try { if (isInteractive) _ = Console.CursorVisible; }
+    catch { isInteractive = false; }
+
+    if (!isInteractive)
+    {
+        // Fallback: simple loop with Clear + Write (no Live renderer)
+        // This avoids the "The handle is invalid" IOException from Spectre.Console.Live
+        while (true)
+        {
+            try { AnsiConsole.Clear(); } catch { /* ignore in non-interactive */ }
+            var now = DateTime.Now;
+            var header = new Rule($"[bold yellow]Squad Monitor v2 - {now:yyyy-MM-dd HH:mm:ss}[/]")
+            {
+                Justification = Justify.Left
+            };
+            AnsiConsole.Write(header);
+            AnsiConsole.WriteLine();
+            DisplayRalphHeartbeat(userProfile);
+            DisplayRalphLog(userProfile);
+            var tokenStats = BuildTokenStatsSection(userProfile);
+            AnsiConsole.Write(tokenStats);
+            if (!disableGitHub)
+            {
+                DisplayGitHubIssues(teamRoot);
+                DisplayGitHubPRs(teamRoot);
+            }
+            var activities = LoadActivities(teamRoot);
+            DisplayOrchestrationLog(activities);
+            var (liveAgentFeed, _) = BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes, feedLimit: feedLines);
+            AnsiConsole.Write(liveAgentFeed);
+            await Task.Delay(interval * 1000);
+        }
+    }
+
     var layout = new Layout("Root");
     
     await AnsiConsole.Live(layout)
