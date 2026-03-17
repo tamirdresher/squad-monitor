@@ -147,84 +147,136 @@ if (runOnce)
 }
 else
 {
-    // Live mode: use AnsiConsole.Live() for flicker-free updates
-    var layout = new Layout("Root");
+    // Live mode: use AnsiConsole.Live() for flicker-free updates.
+    // Some terminals (or redirected output) don't support cursor manipulation,
+    // which causes Spectre.Console's LiveDisplay to throw IOException.
+    // Detect this upfront and fall back to a simple polling loop.
+    bool useLiveDisplay = true;
+    try
+    {
+        // Probe whether the console supports cursor manipulation.
+        // Throws IOException on invalid handles (e.g. redirected output)
+        // and PlatformNotSupportedException on unsupported platforms.
+#pragma warning disable CA1416 // Platform compatibility - handled by try/catch
+        _ = Console.CursorVisible;
+#pragma warning restore CA1416
+    }
+    catch (Exception ex) when (ex is IOException or PlatformNotSupportedException)
+    {
+        useLiveDisplay = false;
+    }
+
+    if (useLiveDisplay)
+    {
+        var layout = new Layout("Root");
     
-    await AnsiConsole.Live(layout)
-        .AutoClear(false)
-        .StartAsync(async ctx =>
-        {
-            do
+        await AnsiConsole.Live(layout)
+            .AutoClear(false)
+            .StartAsync(async ctx =>
             {
-                // Check for keyboard input to toggle view mode
-                if (Console.KeyAvailable)
+                do
                 {
-                    var key = Console.ReadKey(intercept: true);
-                    if (key.Key == ConsoleKey.O)
+                    // Check for keyboard input to toggle view mode
+                    if (Console.KeyAvailable)
                     {
-                        orchestrationOnlyMode = !orchestrationOnlyMode;
-                        if (orchestrationOnlyMode) multiSessionMode = false;
+                        var key = Console.ReadKey(intercept: true);
+                        if (key.Key == ConsoleKey.O)
+                        {
+                            orchestrationOnlyMode = !orchestrationOnlyMode;
+                            if (orchestrationOnlyMode) multiSessionMode = false;
+                        }
+                        else if (key.Key == ConsoleKey.M)
+                        {
+                            multiSessionMode = !multiSessionMode;
+                            if (multiSessionMode) orchestrationOnlyMode = false;
+                        }
+                        else if (key.Key == ConsoleKey.UpArrow)
+                        {
+                            feedScrollOffset = Math.Min(feedScrollOffset + 1, Math.Max(0, previousFeedEntryCount - feedLines));
+                        }
+                        else if (key.Key == ConsoleKey.DownArrow)
+                        {
+                            feedScrollOffset = Math.Max(0, feedScrollOffset - 1);
+                        }
+                        else if (key.Key == ConsoleKey.Home)
+                        {
+                            feedScrollOffset = Math.Max(0, previousFeedEntryCount - feedLines);
+                        }
+                        else if (key.Key == ConsoleKey.End)
+                        {
+                            feedScrollOffset = 0;
+                        }
                     }
-                    else if (key.Key == ConsoleKey.M)
+
+                    // Clear the console before each render to prevent stacking
+                    AnsiConsole.Clear();
+
+                    var now = DateTime.Now;
+                    IRenderable content;
+                    int totalFeedEntries = 0;
+
+                    if (multiSessionMode)
                     {
-                        multiSessionMode = !multiSessionMode;
-                        if (multiSessionMode) orchestrationOnlyMode = false;
+                        content = BuildMultiSessionContent(now, userProfile, sessionWindowMinutes);
                     }
-                    else if (key.Key == ConsoleKey.UpArrow)
+                    else if (orchestrationOnlyMode)
                     {
-                        feedScrollOffset = Math.Min(feedScrollOffset + 1, Math.Max(0, previousFeedEntryCount - feedLines));
+                        content = BuildOrchestrationOnlyContent(now, userProfile, teamRoot);
                     }
-                    else if (key.Key == ConsoleKey.DownArrow)
+                    else
                     {
-                        feedScrollOffset = Math.Max(0, feedScrollOffset - 1);
+                        var (dashContent, feedTotal) = BuildDashboardContent(now, userProfile, teamRoot, disableGitHub, sessionWindowMinutes, feedLines, feedScrollOffset);
+                        content = dashContent;
+                        totalFeedEntries = feedTotal;
                     }
-                    else if (key.Key == ConsoleKey.Home)
+
+                    // Auto-reset scroll offset when new entries arrive
+                    if (totalFeedEntries > 0 && totalFeedEntries != previousFeedEntryCount)
                     {
-                        feedScrollOffset = Math.Max(0, previousFeedEntryCount - feedLines);
+                        previousFeedEntryCount = totalFeedEntries;
+                        if (feedScrollOffset > 0)
+                            feedScrollOffset = 0;
                     }
-                    else if (key.Key == ConsoleKey.End)
-                    {
-                        feedScrollOffset = 0;
-                    }
-                }
 
-                // Clear the console before each render to prevent stacking
-                AnsiConsole.Clear();
+                    layout.Update(content);
+                    ctx.Refresh();
 
-                var now = DateTime.Now;
-                IRenderable content;
-                int totalFeedEntries = 0;
+                    await Task.Delay(TimeSpan.FromSeconds(interval));
 
-                if (multiSessionMode)
-                {
-                    content = BuildMultiSessionContent(now, userProfile, sessionWindowMinutes);
-                }
-                else if (orchestrationOnlyMode)
-                {
-                    content = BuildOrchestrationOnlyContent(now, userProfile, teamRoot);
-                }
-                else
-                {
-                    var (dashContent, feedTotal) = BuildDashboardContent(now, userProfile, teamRoot, disableGitHub, sessionWindowMinutes, feedLines, feedScrollOffset);
-                    content = dashContent;
-                    totalFeedEntries = feedTotal;
-                }
+                } while (true);
+            });
+    }
+    else
+    {
+        // Fallback polling loop for terminals that don't support cursor manipulation
+        AnsiConsole.MarkupLine("[yellow]Note: Live display unavailable (console doesn't support cursor control). Using basic refresh mode.[/]");
+        do
+        {
+            try { AnsiConsole.Clear(); } catch (IOException) { /* can't clear in this terminal */ }
 
-                // Auto-reset scroll offset when new entries arrive
-                if (totalFeedEntries > 0 && totalFeedEntries != previousFeedEntryCount)
-                {
-                    previousFeedEntryCount = totalFeedEntries;
-                    if (feedScrollOffset > 0)
-                        feedScrollOffset = 0;
-                }
+            var now = DateTime.Now;
+            IRenderable content;
 
-                layout.Update(content);
-                ctx.Refresh();
+            if (multiSessionMode)
+            {
+                content = BuildMultiSessionContent(now, userProfile, sessionWindowMinutes);
+            }
+            else if (orchestrationOnlyMode)
+            {
+                content = BuildOrchestrationOnlyContent(now, userProfile, teamRoot);
+            }
+            else
+            {
+                var (dashContent, _) = BuildDashboardContent(now, userProfile, teamRoot, disableGitHub, sessionWindowMinutes, feedLines, feedScrollOffset);
+                content = dashContent;
+            }
 
-                await Task.Delay(TimeSpan.FromSeconds(interval));
+            AnsiConsole.Write(content);
 
-            } while (true);
-        });
+            await Task.Delay(TimeSpan.FromSeconds(interval));
+
+        } while (true);
+    }
 }
 
 return 0;
