@@ -136,17 +136,28 @@ if (runOnce)
 else
 {
     // Live mode: use AnsiConsole.Live() for flicker-free updates
-    // Detect if we have a real interactive console (needed for cursor control + keyboard)
+    // Detect if we have a real interactive console (needed for cursor control + keyboard).
+    // Some terminals (or redirected output) don't support cursor manipulation,
+    // which causes Spectre.Console's LiveDisplay to throw IOException.
     bool isInteractive = !Console.IsInputRedirected && !Console.IsOutputRedirected;
-    try { if (isInteractive) _ = Console.CursorVisible; }
-    catch { isInteractive = false; }
+    try
+    {
+#pragma warning disable CA1416 // Platform compatibility - handled by try/catch
+        if (isInteractive) _ = Console.CursorVisible;
+#pragma warning restore CA1416
+    }
+    catch (Exception ex) when (ex is IOException or PlatformNotSupportedException)
+    {
+        isInteractive = false;
+    }
 
     if (!isInteractive)
     {
         // Fallback: simple loop with Clear + Write (no Live renderer)
+        AnsiConsole.MarkupLine("[yellow]Note: Live display unavailable [[console doesn't support cursor control]]. Using basic refresh mode.[/]");
         while (true)
         {
-            try { AnsiConsole.Clear(); } catch { /* ignore */ }
+            try { AnsiConsole.Clear(); } catch (IOException) { /* can't clear in this terminal */ }
             var now = DateTime.UtcNow;
             var header = new Rule($"[bold yellow]Squad Monitor v2 - {now.ToLocalTime():yyyy-MM-dd HH:mm:ss}[/]")
             {
