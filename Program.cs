@@ -135,16 +135,33 @@ if (runOnce)
 }
 else
 {
-    // Live mode: use AnsiConsole.Live() for flicker-free updates
-    // Detect if we have a real interactive console (needed for cursor control + keyboard)
+    // Live mode: use AnsiConsole.Live() for flicker-free updates.
+    // Some terminals (or redirected output) don't support cursor manipulation,
+    // which causes Spectre.Console's LiveDisplay to throw IOException.
+    // Detect this upfront and fall back to a simple polling loop.
     bool isInteractive = !Console.IsInputRedirected && !Console.IsOutputRedirected;
-    try { if (isInteractive) _ = Console.CursorVisible; }
-    catch { isInteractive = false; }
+    if (isInteractive)
+    {
+        try
+        {
+            // Probe whether the console supports cursor manipulation.
+            // Throws IOException on invalid handles (e.g. redirected output)
+            // and PlatformNotSupportedException on unsupported platforms.
+#pragma warning disable CA1416 // Platform compatibility - handled by try/catch
+            _ = Console.CursorVisible;
+#pragma warning restore CA1416
+        }
+        catch (Exception ex) when (ex is IOException or PlatformNotSupportedException)
+        {
+            isInteractive = false;
+        }
+    }
 
     if (!isInteractive)
     {
         // Fallback: simple loop with Clear + Write (no Live renderer)
         // This avoids the "The handle is invalid" IOException from Spectre.Console.Live
+        AnsiConsole.MarkupLine("[yellow]Note: Live display unavailable (console doesn't support cursor control). Using basic refresh mode.[/]");
         while (true)
         {
             try { AnsiConsole.Clear(); } catch { /* ignore in non-interactive */ }
