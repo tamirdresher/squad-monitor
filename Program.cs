@@ -617,6 +617,35 @@ static string? RunProcess(string fileName, string arguments, string? workingDire
     }
 }
 
+// ─── Clickable Hyperlinks (OSC 8 + Spectre.Console) ────────────────────────
+
+static string? GetGitHubRepoSlug(string? teamRoot) =>
+    RunProcess("gh", "repo view --json nameWithOwner -q .nameWithOwner", teamRoot)?.Trim();
+
+/// <summary>
+/// Renders a linked issue number using Spectre.Console [link=] markup.
+/// Falls back to plain colored number when no repo slug is available.
+/// </summary>
+static string FormatIssueLink(string number, string color, string? repoSlug)
+{
+    var display = $"#{Markup.Escape(number)}";
+    if (!string.IsNullOrEmpty(repoSlug))
+        return $"[link=https://github.com/{repoSlug}/issues/{number}][{color}]{display}[/][/]";
+    return $"[{color}]{display}[/]";
+}
+
+/// <summary>
+/// Renders a linked PR number using Spectre.Console [link=] markup.
+/// Falls back to plain colored number when no repo slug is available.
+/// </summary>
+static string FormatPrLink(string number, string color, string? repoSlug)
+{
+    var display = $"#{Markup.Escape(number)}";
+    if (!string.IsNullOrEmpty(repoSlug))
+        return $"[link=https://github.com/{repoSlug}/pull/{number}][{color}]{display}[/][/]";
+    return $"[{color}]{display}[/]";
+}
+
 static bool IsGhCliAvailable()
 {
     try
@@ -1215,6 +1244,7 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
     var section = new Rule("[magenta]GitHub Issues (squad)[/]") { Justification = Justify.Left };
     items.Add(section);
 
+    var repoSlug = GetGitHubRepoSlug(teamRoot);
     var output = RunProcess("gh", $"issue list --label squad --json number,title,author,createdAt,labels,assignees --limit {maxRows}", teamRoot);
     if (output == null)
     {
@@ -1288,7 +1318,7 @@ static IRenderable BuildGitHubIssuesSection(string teamRoot, int maxRows = 8)
                 title = title.Substring(0, 37) + "...";
 
             table.AddRow(
-                $"[cyan]{Markup.Escape(number)}[/]",
+                FormatIssueLink(number, "cyan", repoSlug),
                 Markup.Escape(title),
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(labelsStr)}[/]",
@@ -1315,6 +1345,7 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
     var section = new Rule("[magenta]GitHub Pull Requests (Open)[/]") { Justification = Justify.Left };
     items.Add(section);
 
+    var repoSlug = GetGitHubRepoSlug(teamRoot);
     var output = RunProcess("gh", "pr list --json number,title,author,createdAt,headRefName,reviewDecision,statusCheckRollup,isDraft --limit 20", teamRoot);
     if (output == null)
     {
@@ -1408,7 +1439,7 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
             var titleMarkup = isDraft ? $"[dim]{Markup.Escape(title)} (draft)[/]" : Markup.Escape(title);
 
             table.AddRow(
-                $"[cyan]{Markup.Escape(number)}[/]",
+                FormatPrLink(number, "cyan", repoSlug),
                 titleMarkup,
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
@@ -1436,6 +1467,7 @@ static IRenderable BuildRecentlyMergedPRsSection(string teamRoot)
     var section = new Rule("[magenta]GitHub Pull Requests (Recently Merged)[/]") { Justification = Justify.Left };
     items.Add(section);
 
+    var repoSlug = GetGitHubRepoSlug(teamRoot);
     // Get closed PRs from the last 7 days
     var output = RunProcess("gh", "pr list --state merged --limit 10 --json number,title,author,mergedAt,headRefName", teamRoot);
     if (output == null)
@@ -1480,7 +1512,7 @@ static IRenderable BuildRecentlyMergedPRsSection(string teamRoot)
                 branch = branch.Substring(0, 17) + "...";
 
             table.AddRow(
-                $"[green]{Markup.Escape(number)}[/]",
+                FormatPrLink(number, "green", repoSlug),
                 Markup.Escape(title),
                 $"[yellow]{Markup.Escape(author)}[/]",
                 $"[dim]{Markup.Escape(branch)}[/]",
