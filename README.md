@@ -3,6 +3,8 @@
 Live terminal dashboard for monitoring AI agent orchestration. See what your Copilot agents and sub-agents are doing in real-time.
 
 ![.NET](https://img.shields.io/badge/.NET-10.0-blue)
+![NuGet](https://img.shields.io/nuget/v/squad-monitor)
+![CI](https://github.com/tamirdresher/squad-monitor/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## What It Does
