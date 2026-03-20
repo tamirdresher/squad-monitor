@@ -27,6 +27,11 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
+  <!-- Exclude test project source files from the main application build -->
+  <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="SharpConsoleUI" Version="2.4.40" />
     <PackageReference Include="Spectre.Console" Version="0.54.0" />

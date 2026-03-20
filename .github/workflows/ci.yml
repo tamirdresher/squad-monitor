@@ -27,7 +27,12 @@ jobs:
       run: dotnet build squad-monitor.csproj --configuration Release --no-restore
 
     - name: Test
-      run: dotnet test --configuration Release --no-build --verbosity normal 2>/dev/null || echo "No test projects found — skipping."
+      run: |
+        if [ -d "tests" ]; then
+          dotnet test tests/SquadMonitor.Tests/SquadMonitor.Tests.csproj --configuration Release --verbosity normal
+        else
+          echo "No test projects found — skipping."
+        fi
 
     - name: Extract version
       id: version
