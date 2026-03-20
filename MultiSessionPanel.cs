@@ -6,14 +6,15 @@ namespace SquadMonitor;
 /// <summary>
 /// Builds Spectre.Console renderables for the multi-session dashboard panel.
 /// Color coding: Green = Active, Yellow = Stale, Gray = Completed.
+/// Runaway sessions (≥ 3× average burn rate) are highlighted in red with a ⚠ warning.
 /// </summary>
 public static class MultiSessionPanel
 {
     /// <summary>
-    /// Builds the complete multi-session panel including the session table
-    /// and an aggregate summary row.
+    /// Builds the complete multi-session panel including the session table,
+    /// an aggregate summary row, and lifecycle event feed.
     /// </summary>
-    public static IRenderable Build(SessionAggregator aggregator)
+    public static IRenderable Build(SessionAggregator aggregator, SessionManager? sessionManager = null)
     {
         var sections = new List<IRenderable>();
 
@@ -26,6 +27,13 @@ public static class MultiSessionPanel
         sections.Add(BuildMetricsSummary(metrics));
         sections.Add(Text.Empty);
 
+        // Runaway alert banner
+        if (metrics.RunawaySessions > 0)
+        {
+            sections.Add(new Markup($"  [red bold]⚠  {metrics.RunawaySessions} runaway session(s) detected — burn rate ≥ 3× average[/]"));
+            sections.Add(Text.Empty);
+        }
+
         // Session table
         var summaries = aggregator.GetSessionSummaries();
         if (summaries.Count == 0)
@@ -34,15 +42,27 @@ public static class MultiSessionPanel
         }
         else
         {
-            sections.Add(BuildSessionTable(summaries));
+            sections.Add(BuildSessionTable(summaries, metrics.AverageBurnRatePerMinute));
         }
 
         sections.Add(Text.Empty);
+
+        // Lifecycle event feed (last 8 events)
+        if (sessionManager is not null)
+        {
+            var events = sessionManager.LifecycleEvents;
+            if (events.Count > 0)
+            {
+                sections.Add(BuildLifecycleFeed(events));
+                sections.Add(Text.Empty);
+            }
+        }
+
         return new Rows(sections);
     }
 
     /// <summary>
-    /// Builds a single-line aggregate metrics bar.
+    /// Builds a single-line aggregate metrics bar including token totals and cost.
     /// </summary>
     private static IRenderable BuildMetricsSummary(SessionAggregateMetrics metrics)
     {
@@ -62,14 +82,41 @@ public static class MultiSessionPanel
             parts.Add($"[dim]Last activity: {FormatAge(ago)}[/]");
         }
 
-        return new Markup("  " + string.Join("  │  ", parts));
+        // Token aggregation row (only shown when data is available)
+        var tokenParts = new List<string>();
+        if (metrics.TotalTokensAcrossSessions > 0)
+        {
+            tokenParts.Add($"[bold]Tokens:[/] [blue]{TokenTracker.FormatTokenCount(metrics.TotalTokensAcrossSessions)}[/]");
+            tokenParts.Add($"[bold]Cost:[/] [white]${metrics.TotalCostAcrossSessions:F2}[/]");
+        }
+        if (metrics.AverageBurnRatePerMinute > 0)
+        {
+            tokenParts.Add($"[dim]Avg burn: {metrics.AverageBurnRatePerMinute:F0} tok/min[/]");
+        }
+        if (metrics.RunawaySessions > 0)
+        {
+            tokenParts.Add($"[red bold]⚠ Runaway: {metrics.RunawaySessions}[/]");
+        }
+
+        var lines = new List<IRenderable>
+        {
+            new Markup("  " + string.Join("  │  ", parts))
+        };
+        if (tokenParts.Count > 0)
+        {
+            lines.Add(new Markup("  " + string.Join("  │  ", tokenParts)));
+        }
+
+        return new Rows(lines);
     }
 
     /// <summary>
-    /// Builds the session table with color-coded status rows.
+    /// Builds the session table with color-coded status rows, token stats, and burn rates.
     /// </summary>
-    private static IRenderable BuildSessionTable(IReadOnlyList<SessionSummary> summaries)
+    private static IRenderable BuildSessionTable(IReadOnlyList<SessionSummary> summaries, double avgBurnRate)
     {
+        var hasTokenData = summaries.Any(s => s.TotalTokens > 0);
+
         var table = new Table()
             .Border(TableBorder.Rounded)
             .BorderColor(Color.Grey)
@@ -83,47 +130,84 @@ public static class MultiSessionPanel
             .AddColumn(new TableColumn("[bold]Last Activity[/]").RightAligned())
             .AddColumn(new TableColumn("[bold]Working Dir[/]"));
 
+        if (hasTokenData)
+        {
+            table.AddColumn(new TableColumn("[bold]Tokens[/]").RightAligned());
+            table.AddColumn(new TableColumn("[bold]Cost[/]").RightAligned());
+            table.AddColumn(new TableColumn("[bold]Burn/min[/]").RightAligned());
+        }
+
         int totalAgents = 0;
         int totalSessions = 0;
+        long totalTokens = 0;
+        double totalCost = 0;
 
         foreach (var s in summaries)
         {
             totalSessions++;
             totalAgents += s.AgentCount;
+            totalTokens += s.TotalTokens;
+            totalCost += s.EstimatedCost;
 
             var statusColor = s.Status switch
             {
-                SessionStatus.Active => "green",
-                SessionStatus.Stale => "yellow",
+                SessionStatus.Active    => "green",
+                SessionStatus.Stale     => "yellow",
                 SessionStatus.Completed => "grey",
-                _ => "dim",
+                _                       => "dim",
             };
 
             var statusIcon = s.Status switch
             {
-                SessionStatus.Active => "●",
-                SessionStatus.Stale => "◐",
+                SessionStatus.Active    => "●",
+                SessionStatus.Stale     => "◐",
                 SessionStatus.Completed => "○",
-                _ => "?",
+                _                       => "?",
             };
+
+            // Runaway sessions get a prominent red marker
+            var idDisplay = s.IsRunaway
+                ? $"[red bold]⚠ {Markup.Escape(s.ShortId)}[/]"
+                : $"[{statusColor}]{Markup.Escape(s.ShortId)}[/]";
 
             var age = DateTime.Now - s.LastActivity;
             var cwdDisplay = TruncatePath(s.WorkingDirectory, 30);
 
-            table.AddRow(
-                new Markup($"[{statusColor}]{Markup.Escape(s.ShortId)}[/]"),
+            var baseRow = new List<IRenderable>
+            {
+                new Markup(idDisplay),
                 new Markup($"[dim]{Markup.Escape(s.SessionType)}[/]"),
                 new Markup($"[dim]{Markup.Escape(s.MachineName)}[/]"),
                 new Markup($"[{statusColor}]{statusIcon} {s.Status}[/]"),
                 new Markup($"[{statusColor}]{FormatDuration(s.Duration)}[/]"),
                 new Markup($"[cyan]{s.AgentCount}[/]"),
                 new Markup($"[{statusColor}]{FormatAge(age)}[/]"),
-                new Markup($"[dim]{Markup.Escape(cwdDisplay)}[/]")
-            );
+                new Markup($"[dim]{Markup.Escape(cwdDisplay)}[/]"),
+            };
+
+            if (hasTokenData)
+            {
+                var burnColor = s.IsRunaway ? "red bold" :
+                                s.BurnRatePerMinute > avgBurnRate * 1.5 ? "yellow" : "green";
+                var burnDisplay = s.BurnRatePerMinute > 0
+                    ? $"[{burnColor}]{s.BurnRatePerMinute:F0}[/]"
+                    : "[dim]—[/]";
+
+                baseRow.Add(new Markup(s.TotalTokens > 0
+                    ? $"[blue]{TokenTracker.FormatTokenCount(s.TotalTokens)}[/]"
+                    : "[dim]—[/]"));
+                baseRow.Add(new Markup(s.EstimatedCost > 0
+                    ? $"[white]${s.EstimatedCost:F2}[/]"
+                    : "[dim]—[/]"));
+                baseRow.Add(new Markup(burnDisplay));
+            }
+
+            table.AddRow(baseRow.ToArray());
         }
 
         // Summary footer row
-        table.AddRow(
+        var footerRow = new List<IRenderable>
+        {
             new Markup("[bold]TOTAL[/]"),
             new Markup(""),
             new Markup(""),
@@ -131,10 +215,49 @@ public static class MultiSessionPanel
             new Markup(""),
             new Markup($"[bold cyan]{totalAgents}[/]"),
             new Markup(""),
-            new Markup("")
-        );
+            new Markup(""),
+        };
+
+        if (hasTokenData)
+        {
+            footerRow.Add(new Markup($"[bold blue]{TokenTracker.FormatTokenCount(totalTokens)}[/]"));
+            footerRow.Add(new Markup($"[bold white]${totalCost:F2}[/]"));
+            footerRow.Add(new Markup(""));
+        }
+
+        table.AddRow(footerRow.ToArray());
 
         return table;
+    }
+
+    /// <summary>
+    /// Builds a compact lifecycle event feed showing the most recent events.
+    /// </summary>
+    private static IRenderable BuildLifecycleFeed(IReadOnlyList<SessionLifecycleEvent> events)
+    {
+        var sections = new List<IRenderable>
+        {
+            new Markup("  [dim bold]── Lifecycle Events ──[/]")
+        };
+
+        foreach (var evt in events.TakeLast(8))
+        {
+            var (icon, color) = evt.EventType switch
+            {
+                SessionLifecycleEventType.Started    => ("▶", "green"),
+                SessionLifecycleEventType.Resumed    => ("↺", "cyan"),
+                SessionLifecycleEventType.BecameStale => ("◐", "yellow"),
+                SessionLifecycleEventType.Ended      => ("■", "grey"),
+                _                                    => ("·", "dim"),
+            };
+
+            var detail = evt.Detail is not null ? $" [dim]{Markup.Escape(evt.Detail)}[/]" : "";
+            sections.Add(new Markup(
+                $"  [{color}]{icon}[/] [dim]{evt.Timestamp:HH:mm:ss}[/] [{color}]{Markup.Escape(evt.EventType.ToString())}[/] " +
+                $"[dim]{Markup.Escape(evt.SessionName)}[/]{detail}"));
+        }
+
+        return new Rows(sections);
     }
 
     // ── Formatting helpers ───────────────────────────────────────────────
