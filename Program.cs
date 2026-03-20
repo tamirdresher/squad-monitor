@@ -10,12 +10,32 @@ using System.Text.RegularExpressions;
 // Parse args
 var interval = 5;
 var useSharpUI = false;
+var runOnce = false;
+var disableGitHub = false;
+var multiSessionMode = false;
+var sessionWindowMinutes = 30;
 for (int i = 0; i < args.Length; i++)
 {
-    if (args[i] == "--interval" && i + 1 < args.Length && int.TryParse(args[i + 1], out var n))
+    if (args[i] == "--interval" && i + 1 < args.Length && int.TryParse(args[i + 1], out var n) && n > 0)
+    {
         interval = n;
+        i++;
+        continue;
+    }
     if (args[i] is "--beta" or "--sharp-ui")
         useSharpUI = true;
+    if (args[i] is "--once")
+        runOnce = true;
+    if (args[i] is "--no-github")
+        disableGitHub = true;
+    if (args[i] is "--multi-session" or "-m")
+        multiSessionMode = true;
+    if (args[i] == "--session-window" && i + 1 < args.Length && int.TryParse(args[i + 1], out var sw) && sw > 0)
+    {
+        sessionWindowMinutes = sw;
+        i++;
+        continue;
+    }
 }
 
 var teamRoot = FindTeamRoot();
@@ -38,11 +58,7 @@ catch (IOException)
     Environment.SetEnvironmentVariable("NO_COLOR", "1");
 }
 
-var runOnce = false;
 var orchestrationOnlyMode = false;
-var multiSessionMode = false;
-var disableGitHub = false;
-var sessionWindowMinutes = 30;
 var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
 if (teamRoot == null)

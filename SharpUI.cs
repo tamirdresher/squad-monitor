@@ -64,8 +64,8 @@ public static class SharpUI
     private record FeedEntry(DateTime Time, string Icon, string Text, string Session, string SessionColor);
 
     // ── Caching infrastructure to reduce CPU/IO/network pressure ──────
-    private static List<GitHubIssue>? _cachedIssues;
-    private static List<GitHubPR>? _cachedPRs;
+    private static List<GitHubIssue> _cachedIssues = new();
+    private static List<GitHubPR> _cachedPRs = new();
     private static DateTime _cachedGitHubTime = DateTime.MinValue;
     private static readonly TimeSpan GitHubCacheTtl = TimeSpan.FromSeconds(60);
 
@@ -318,8 +318,9 @@ public static class SharpUI
             // Status bar with clickable items
             Action doRefresh = () =>
             {
-                _cachedIssues = null;
-                _cachedPRs = null;
+                _cachedIssues = new();
+                _cachedPRs = new();
+                _cachedGitHubTime = DateTime.MinValue;
                 _cachedFeedData = null;
                 _cachedTokenData = null;
                 RefreshAllPanels(headerCtrl, issuesTable, prsTable, ralphMarkup,
@@ -476,7 +477,7 @@ public static class SharpUI
             });
 
             // GitHub: cache for 60s
-            if (_cachedIssues == null || _cachedPRs == null || (now - _cachedGitHubTime) >= GitHubCacheTtl)
+            if (_cachedIssues.Count == 0 || _cachedPRs.Count == 0 || (now - _cachedGitHubTime) >= GitHubCacheTtl)
             {
                 (_cachedIssues, _cachedPRs) = GetGitHubData(teamRoot, disableGitHub);
                 _cachedGitHubTime = now;
@@ -643,18 +644,20 @@ public static class SharpUI
         // Feed sparkline: track events per 30-second bucket
         var bucketTime = new DateTime(DateTime.Now.Year, DateTime.Now.Month, DateTime.Now.Day,
             DateTime.Now.Hour, DateTime.Now.Minute, DateTime.Now.Second / 30 * 30);
+        var bucketEnd = bucketTime.AddSeconds(30);
+        var bucketCount = data.Entries.Count(e => e.Time >= bucketTime && e.Time < bucketEnd);
         if (bucketTime != _lastFeedHistoryBucket)
         {
             if (_lastFeedHistoryBucket != DateTime.MinValue)
                 _feedActivityHistory.Add(_currentBucketCount);
-            _currentBucketCount = data.Entries.Count;
+            _currentBucketCount = bucketCount;
             _lastFeedHistoryBucket = bucketTime;
             while (_feedActivityHistory.Count > 60)
                 _feedActivityHistory.RemoveAt(0);
         }
         else
         {
-            _currentBucketCount = data.Entries.Count;
+            _currentBucketCount = bucketCount;
         }
 
         if (_feedActivityHistory.Count > 0)
@@ -739,7 +742,10 @@ public static class SharpUI
                     issues.Add(new GitHubIssue(num, title, author, asgnStr, age, repoSlug));
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                issues.Add(new GitHubIssue("!", $"Error parsing issues: {ex.Message}", "", "", "", repoSlug));
+            }
         }
 
         // PRs
@@ -767,7 +773,10 @@ public static class SharpUI
                     prs.Add(new GitHubPR(num, title, author, branch, review, isDraft, age, repoSlug));
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                prs.Add(new GitHubPR("!", $"Error parsing PRs: {ex.Message}", "", "", "", false, "", repoSlug));
+            }
         }
 
         return (issues, prs);
