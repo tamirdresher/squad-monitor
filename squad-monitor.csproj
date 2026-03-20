@@ -28,7 +28,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="SharpConsoleUI" Version="2.4.40" />
+    <PackageReference Include="SharpConsoleUI" Version="2.4.44" />
     <PackageReference Include="Spectre.Console" Version="0.54.0" />
   </ItemGroup>
 

@@ -7,65 +7,43 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-// Ensure emoji and Unicode render correctly on Windows console
-Console.OutputEncoding = Encoding.UTF8;
-
-// Fix for "The handle is invalid" when launched from non-interactive contexts
-// Spectre.Console tries to set CursorVisible which fails without a real console
-try { _ = Console.CursorVisible; }
-catch (IOException)
-{
-    // Re-attach to a console if we don't have one (e.g., Start-Process from another PS)
-    // Force Spectre to use a plain console backend when no real console is attached
-    Environment.SetEnvironmentVariable("NO_COLOR", "1");
-}
-
+// Parse args
 var interval = 5;
-var runOnce = false;
-var orchestrationOnlyMode = false;
-var multiSessionMode = false;
-var disableGitHub = false;
 var useSharpUI = false;
-var sessionWindowMinutes = 30;
-var teamRoot = FindTeamRoot();
-var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-
 for (int i = 0; i < args.Length; i++)
 {
     if (args[i] == "--interval" && i + 1 < args.Length && int.TryParse(args[i + 1], out var n))
-    {
         interval = n;
-        i++;
-    }
-    else if (args[i] == "--once")
-    {
-        runOnce = true;
-    }
-    else if (args[i] == "--no-github")
-    {
-        disableGitHub = true;
-    }
-    else if (args[i] == "--sharp-ui" || args[i] == "--beta")
-    {
+    if (args[i] is "--beta" or "--sharp-ui")
         useSharpUI = true;
-    }
-    else if (args[i] == "--multi-session" || args[i] == "-m")
-    {
-        multiSessionMode = true;
-    }
-    else if (args[i] == "--session-window" && i + 1 < args.Length && int.TryParse(args[i + 1], out var sw))
-    {
-        sessionWindowMinutes = sw;
-        i++;
-    }
 }
 
-// If SharpConsoleUI mode is enabled, run the new TUI
+var teamRoot = FindTeamRoot();
+
+// Launch SharpConsoleUI mode if requested
 if (useSharpUI)
 {
     await SharpUI.RunAsync(teamRoot, interval);
     return 0;
 }
+
+// --- Default Spectre.Console path ---
+// Ensure emoji and Unicode render correctly on Windows console
+Console.OutputEncoding = Encoding.UTF8;
+
+// Fix for "The handle is invalid" when launched from non-interactive contexts
+try { _ = Console.CursorVisible; }
+catch (IOException)
+{
+    Environment.SetEnvironmentVariable("NO_COLOR", "1");
+}
+
+var runOnce = false;
+var orchestrationOnlyMode = false;
+var multiSessionMode = false;
+var disableGitHub = false;
+var sessionWindowMinutes = 30;
+var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
 if (teamRoot == null)
 {
