@@ -243,6 +243,190 @@ public sealed class TokenReport
     }
 
     private static string Esc(string s) => Spectre.Console.Markup.Escape(s);
+
+    /// <summary>
+    /// Exports the daily report for today as JSON to <c>~/.squad/token-reports/{date}.json</c>.
+    /// Creates the directory if it does not exist.
+    /// Returns the path the report was written to, or <c>null</c> on failure.
+    /// </summary>
+    public string? ExportDailyReport(string? userProfile = null, DateTime? date = null)
+    {
+        var report = GenerateDailyReport(date);
+        return TokenReportExporter.ExportToJson(report, userProfile);
+    }
+}
+
+/// <summary>
+/// Handles serialization and export of <see cref="ReportSummary"/> objects
+/// to <c>~/.squad/token-reports/</c>.
+/// </summary>
+public static class TokenReportExporter
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    /// <summary>
+    /// Writes a report as indented JSON to <c>~/.squad/token-reports/{date}.json</c>.
+    /// </summary>
+    /// <param name="report">The report to export.</param>
+    /// <param name="userProfile">
+    /// User home directory. Defaults to <see cref="Environment.SpecialFolder.UserProfile"/>.
+    /// </param>
+    /// <returns>The full path written, or <c>null</c> if the export failed.</returns>
+    public static string? ExportToJson(ReportSummary report, string? userProfile = null)
+    {
+        try
+        {
+            var home = userProfile
+                ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var dir = Path.Combine(home, ".squad", "token-reports");
+            Directory.CreateDirectory(dir);
+
+            var filename = $"{report.PeriodStart:yyyy-MM-dd}.json";
+            var path = Path.Combine(dir, filename);
+
+            // Merge with existing file if present (accumulate calls during the day)
+            ReportSummary merged = report;
+            if (File.Exists(path))
+            {
+                try
+                {
+                    var existingEnvelope = JsonSerializer.Deserialize<TokenReportExportEnvelope>(
+                        File.ReadAllText(path), JsonOptions);
+                    if (existingEnvelope?.Report is not null)
+                        merged = MergeReports(existingEnvelope.Report, report);
+                }
+                catch (JsonException) { /* corrupt file — overwrite */ }
+            }
+
+            var json = JsonSerializer.Serialize(new TokenReportExportEnvelope
+            {
+                SchemaVersion = "1.0",
+                ExportedAt = DateTime.UtcNow,
+                Report = merged,
+            }, JsonOptions);
+
+            File.WriteAllText(path, json, System.Text.Encoding.UTF8);
+            return path;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Lists all exported report files sorted by date descending.
+    /// </summary>
+    public static IReadOnlyList<string> ListExports(string? userProfile = null)
+    {
+        var home = userProfile
+            ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var dir = Path.Combine(home, ".squad", "token-reports");
+        if (!Directory.Exists(dir))
+            return Array.Empty<string>();
+
+        return new DirectoryInfo(dir)
+            .GetFiles("*.json")
+            .OrderByDescending(f => f.Name)
+            .Select(f => f.FullName)
+            .ToList()
+            .AsReadOnly();
+    }
+
+    /// <summary>
+    /// Loads and deserializes a previously exported report from disk.
+    /// Returns <c>null</c> if the file doesn't exist or can't be parsed.
+    /// </summary>
+    public static ReportSummary? LoadExport(string path)
+    {
+        try
+        {
+            var json = File.ReadAllText(path);
+            var envelope = JsonSerializer.Deserialize<TokenReportExportEnvelope>(json, JsonOptions);
+            return envelope?.Report;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Merges two reports covering the same period (summing counters, de-duplicating breakdowns)
+    private static ReportSummary MergeReports(ReportSummary a, ReportSummary b)
+    {
+        return new ReportSummary
+        {
+            Title = b.Title,
+            PeriodStart = a.PeriodStart < b.PeriodStart ? a.PeriodStart : b.PeriodStart,
+            PeriodEnd = a.PeriodEnd > b.PeriodEnd ? a.PeriodEnd : b.PeriodEnd,
+            TotalCalls = a.TotalCalls + b.TotalCalls,
+            TotalInputTokens = a.TotalInputTokens + b.TotalInputTokens,
+            TotalOutputTokens = a.TotalOutputTokens + b.TotalOutputTokens,
+            TotalCachedTokens = a.TotalCachedTokens + b.TotalCachedTokens,
+            TotalEstimatedCost = a.TotalEstimatedCost + b.TotalEstimatedCost,
+            ModelBreakdown = MergeModelBreakdowns(a.ModelBreakdown, b.ModelBreakdown),
+            AgentBreakdown = MergeAgentBreakdowns(a.AgentBreakdown, b.AgentBreakdown),
+            SessionBreakdown = MergeSessionBreakdowns(a.SessionBreakdown, b.SessionBreakdown),
+            DailyCosts = b.DailyCosts, // latest wins for daily costs
+        };
+    }
+
+    private static List<ModelBreakdown> MergeModelBreakdowns(
+        List<ModelBreakdown> a, List<ModelBreakdown> b)
+    {
+        return a.Concat(b)
+            .GroupBy(m => m.Model, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new ModelBreakdown
+            {
+                Model = g.Key,
+                Calls = g.Sum(m => m.Calls),
+                InputTokens = g.Sum(m => m.InputTokens),
+                OutputTokens = g.Sum(m => m.OutputTokens),
+                EstimatedCost = g.Sum(m => m.EstimatedCost),
+            })
+            .OrderByDescending(m => m.EstimatedCost)
+            .ToList();
+    }
+
+    private static List<AgentBreakdown> MergeAgentBreakdowns(
+        List<AgentBreakdown> a, List<AgentBreakdown> b)
+    {
+        return a.Concat(b)
+            .GroupBy(ag => ag.Agent, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new AgentBreakdown
+            {
+                Agent = g.Key,
+                Calls = g.Sum(ag => ag.Calls),
+                InputTokens = g.Sum(ag => ag.InputTokens),
+                OutputTokens = g.Sum(ag => ag.OutputTokens),
+                EstimatedCost = g.Sum(ag => ag.EstimatedCost),
+            })
+            .OrderByDescending(ag => ag.EstimatedCost)
+            .ToList();
+    }
+
+    private static List<SessionBreakdown> MergeSessionBreakdowns(
+        List<SessionBreakdown> a, List<SessionBreakdown> b)
+    {
+        return a.Concat(b)
+            .GroupBy(s => s.SessionId, StringComparer.OrdinalIgnoreCase)
+            .Select(g => new SessionBreakdown
+            {
+                SessionId = g.Key,
+                Calls = g.Sum(s => s.Calls),
+                TotalTokens = g.Sum(s => s.TotalTokens),
+                EstimatedCost = g.Sum(s => s.EstimatedCost),
+                FirstActivity = g.Min(s => s.FirstActivity),
+                LastActivity = g.Max(s => s.LastActivity),
+            })
+            .OrderByDescending(s => s.EstimatedCost)
+            .ToList();
+    }
 }
 
 // ── Report data models ──
@@ -297,4 +481,19 @@ public sealed class DailyCost
     public int Calls { get; set; }
     public long TotalTokens { get; set; }
     public double EstimatedCost { get; set; }
+}
+
+/// <summary>
+/// Wraps a <see cref="ReportSummary"/> with versioning metadata for file exports.
+/// </summary>
+public sealed class TokenReportExportEnvelope
+{
+    /// <summary>Schema version for forward-compatibility. Currently "1.0".</summary>
+    public required string SchemaVersion { get; set; }
+
+    /// <summary>UTC timestamp when this file was last written.</summary>
+    public DateTime ExportedAt { get; set; }
+
+    /// <summary>The actual report data.</summary>
+    public required ReportSummary Report { get; set; }
 }

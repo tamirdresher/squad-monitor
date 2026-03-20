@@ -42,13 +42,31 @@ public sealed class Session
 /// <summary>
 /// Discovers and manages Copilot CLI / Agency sessions by scanning
 /// well-known session-state and log directories on disk.
+/// Emits <see cref="SessionLifecycleEvent"/> records as sessions are discovered, stall, or end.
 /// </summary>
 public sealed class SessionManager
 {
     private readonly string _userProfile;
     private readonly TimeSpan _staleTimeout;
     private readonly Dictionary<string, Session> _sessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SessionStatus> _previousStatuses = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<SessionLifecycleEvent> _lifecycleEvents = new();
     private readonly object _lock = new();
+
+    /// <summary>
+    /// Chronological list of all lifecycle events emitted since this manager was created.
+    /// Access is thread-safe — the list is only appended inside <c>_lock</c>.
+    /// </summary>
+    public IReadOnlyList<SessionLifecycleEvent> LifecycleEvents
+    {
+        get { lock (_lock) { return _lifecycleEvents.ToList().AsReadOnly(); } }
+    }
+
+    /// <summary>
+    /// Raised synchronously (inside the lock) whenever a lifecycle event is emitted.
+    /// Subscribers should be fast; do not call back into <see cref="SessionManager"/> from this handler.
+    /// </summary>
+    public event Action<SessionLifecycleEvent>? LifecycleEventEmitted;
 
     /// <summary>
     /// Creates a new <see cref="SessionManager"/>.
@@ -95,16 +113,28 @@ public sealed class SessionManager
 
                 if (_sessions.TryGetValue(session.Id, out var existing))
                 {
+                    var prevStatus = existing.Status;
                     // Update mutable fields
                     existing.LastActivity = session.LastActivity;
                     existing.AgentCount = session.AgentCount;
                     existing.McpServerCount = session.McpServerCount;
                     existing.Status = ClassifyStatus(existing, now);
+
+                    // Emit lifecycle events on status transitions
+                    EmitTransitionEvents(existing, prevStatus, existing.Status);
                 }
                 else
                 {
                     session.Status = ClassifyStatus(session, now);
                     _sessions[session.Id] = session;
+                    _previousStatuses[session.Id] = session.Status;
+                    EmitEvent(new SessionLifecycleEvent
+                    {
+                        EventType = SessionLifecycleEventType.Started,
+                        SessionId = session.Id,
+                        SessionName = session.Name,
+                        Detail = $"Type={session.SessionType} CWD={session.WorkingDirectory}",
+                    });
                 }
             }
 
@@ -113,7 +143,9 @@ public sealed class SessionManager
             {
                 if (!seenIds.Contains(kvp.Key) && kvp.Value.Status != SessionStatus.Completed)
                 {
+                    var prevStatus = kvp.Value.Status;
                     kvp.Value.Status = SessionStatus.Completed;
+                    EmitTransitionEvents(kvp.Value, prevStatus, SessionStatus.Completed);
                 }
             }
 
@@ -183,6 +215,52 @@ public sealed class SessionManager
     }
 
     // ── Private scanning helpers ─────────────────────────────────────────
+
+    private void EmitTransitionEvents(Session session, SessionStatus prev, SessionStatus next)
+    {
+        if (prev == next) return;
+
+        SessionLifecycleEventType? eventType = (prev, next) switch
+        {
+            (SessionStatus.Active, SessionStatus.Stale) => SessionLifecycleEventType.BecameStale,
+            (SessionStatus.Stale, SessionStatus.Active) => SessionLifecycleEventType.Resumed,
+            (_, SessionStatus.Completed)                => SessionLifecycleEventType.Ended,
+            _                                           => null,
+        };
+
+        if (eventType is null) return;
+
+        var detail = next == SessionStatus.Completed
+            ? $"Duration={FormatDuration(session.Duration)}"
+            : null;
+
+        EmitEvent(new SessionLifecycleEvent
+        {
+            EventType = eventType.Value,
+            SessionId = session.Id,
+            SessionName = session.Name,
+            Detail = detail,
+        });
+    }
+
+    private void EmitEvent(SessionLifecycleEvent evt)
+    {
+        _lifecycleEvents.Add(evt);
+        _previousStatuses[evt.SessionId] = evt.EventType switch
+        {
+            SessionLifecycleEventType.Started  => SessionStatus.Active,
+            SessionLifecycleEventType.Resumed  => SessionStatus.Active,
+            SessionLifecycleEventType.BecameStale => SessionStatus.Stale,
+            SessionLifecycleEventType.Ended    => SessionStatus.Completed,
+            _                                  => SessionStatus.Active,
+        };
+        // Raise event outside try/catch intentionally — callers should not throw.
+        LifecycleEventEmitted?.Invoke(evt);
+    }
+
+    private static string FormatDuration(TimeSpan d) =>
+        d.TotalHours >= 1 ? $"{(int)d.TotalHours}h{d.Minutes:D2}m" :
+        d.TotalMinutes >= 1 ? $"{(int)d.TotalMinutes}m" : $"{(int)d.TotalSeconds}s";
 
     private SessionStatus ClassifyStatus(Session session, DateTime now)
     {
