@@ -1,3 +1,7 @@
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+
 namespace SquadMonitor;
 
 /// <summary>
@@ -124,7 +128,77 @@ public sealed class TokenAlertService
             });
         }
 
+        // ── Budget alerts (SQUAD_TOKEN_BUDGET) ──
+        if (_config.MaxTokenBudget > 0)
+        {
+            var budgetPct = (double)totalTokens / _config.MaxTokenBudget;
+
+            if (budgetPct >= 1.0)
+            {
+                TryAddAlert(newAlerts, new TokenAlert
+                {
+                    Level = AlertLevel.Critical,
+                    Category = AlertCategory.Budget,
+                    Message = $"Token budget EXCEEDED: {TokenTracker.FormatTokenCount(totalTokens)} / {TokenTracker.FormatTokenCount(_config.MaxTokenBudget)} ({budgetPct:P0} used)",
+                    CurrentValue = totalTokens,
+                    ThresholdValue = _config.MaxTokenBudget,
+                    Key = "budget-100"
+                });
+            }
+            else if (budgetPct >= _config.BudgetWarningPct)
+            {
+                TryAddAlert(newAlerts, new TokenAlert
+                {
+                    Level = AlertLevel.Warning,
+                    Category = AlertCategory.Budget,
+                    Message = $"Token budget at {budgetPct:P0}: {TokenTracker.FormatTokenCount(totalTokens)} / {TokenTracker.FormatTokenCount(_config.MaxTokenBudget)}",
+                    CurrentValue = totalTokens,
+                    ThresholdValue = _config.MaxTokenBudget * _config.BudgetWarningPct,
+                    Key = "budget-80"
+                });
+            }
+        }
+
         return newAlerts;
+    }
+
+    /// <summary>
+    /// Fires new alerts to the console and optionally to a configured webhook URL.
+    /// Call this after Evaluate() to dispatch notifications.
+    /// </summary>
+    public async Task FireAlertsAsync(IReadOnlyList<TokenAlert> newAlerts)
+    {
+        foreach (var alert in newAlerts)
+        {
+            // Console notification
+            var prefix = alert.Level == AlertLevel.Critical ? "🔴 [BUDGET ALERT]" : "🟡 [BUDGET WARNING]";
+            Console.WriteLine($"{prefix} {alert.Message}");
+
+            // Optional webhook POST
+            if (!string.IsNullOrEmpty(_config.WebhookUrl))
+            {
+                try
+                {
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+                    var payload = JsonSerializer.Serialize(new
+                    {
+                        level = alert.Level.ToString(),
+                        category = alert.Category.ToString(),
+                        message = alert.Message,
+                        currentValue = alert.CurrentValue,
+                        thresholdValue = alert.ThresholdValue,
+                        timestamp = alert.Timestamp.ToString("o")
+                    });
+                    await http.PostAsync(
+                        _config.WebhookUrl,
+                        new StringContent(payload, Encoding.UTF8, "application/json"));
+                }
+                catch
+                {
+                    // Webhook is optional — swallow errors silently
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -199,6 +273,25 @@ public sealed class TokenAlertConfig
     /// <summary>Total token usage limit across all sessions.</summary>
     public long TotalTokenLimit { get; set; } = 10_000_000;
 
+    /// <summary>
+    /// Maximum token budget for the current session/day.
+    /// Read from the SQUAD_TOKEN_BUDGET environment variable. Default: 100,000.
+    /// Alerts fire at <see cref="BudgetWarningPct"/> (default 80%) and 100%.
+    /// </summary>
+    public long MaxTokenBudget { get; set; } = 100_000;
+
+    /// <summary>
+    /// Fraction of <see cref="MaxTokenBudget"/> at which a warning alert fires.
+    /// Default: 0.80 (80%).
+    /// </summary>
+    public double BudgetWarningPct { get; set; } = 0.80;
+
+    /// <summary>
+    /// Optional webhook URL to POST alert payloads to.
+    /// Read from the SQUAD_WEBHOOK_URL environment variable.
+    /// </summary>
+    public string? WebhookUrl { get; set; }
+
     /// <summary>Default configuration with reasonable thresholds.</summary>
     public static TokenAlertConfig Default => new();
 
@@ -223,6 +316,11 @@ public sealed class TokenAlertConfig
             config.AgentCostLimitUsd = acl;
         if (long.TryParse(Environment.GetEnvironmentVariable("SQUAD_TOTAL_TOKEN_LIMIT"), out var ttl))
             config.TotalTokenLimit = ttl;
+        if (long.TryParse(Environment.GetEnvironmentVariable("SQUAD_TOKEN_BUDGET"), out var budget))
+            config.MaxTokenBudget = budget;
+        if (double.TryParse(Environment.GetEnvironmentVariable("SQUAD_BUDGET_WARNING_PCT"), out var bwp))
+            config.BudgetWarningPct = bwp;
+        config.WebhookUrl = Environment.GetEnvironmentVariable("SQUAD_WEBHOOK_URL");
 
         return config;
     }
@@ -254,5 +352,7 @@ public enum AlertCategory
     SessionTokens,
     SessionCost,
     AgentCost,
-    TotalTokens
+    TotalTokens,
+    /// <summary>Token budget threshold (80% warning / 100% critical) from SQUAD_TOKEN_BUDGET.</summary>
+    Budget
 }
