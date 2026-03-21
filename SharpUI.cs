@@ -7,80 +7,72 @@ using SharpConsoleUI.Helpers;
 using SharpConsoleUI.Layout;
 using SharpConsoleUI.Rendering;
 using Spectre.Console;
+
+// Aliases to resolve ambiguity between Spectre.Console and SharpConsoleUI
+using SColor = SharpConsoleUI.Color;
+using SHAlign = SharpConsoleUI.Layout.HorizontalAlignment;
+using SVAlign = SharpConsoleUI.Layout.VerticalAlignment;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-using HorizontalAlignment = SharpConsoleUI.Layout.HorizontalAlignment;
-using VerticalAlignment = SharpConsoleUI.Layout.VerticalAlignment;
-using TextJustification = SharpConsoleUI.Layout.TextJustification;
-
 namespace SquadMonitor;
 
+// ΓöÇΓöÇΓöÇ Structured Data Records ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
+/// <summary>GitHub issue with structured data for TableControl.</summary>
+record GitHubIssue(int Number, string Title, string Author, string Assignees, DateTime CreatedAt, string? RepoSlug);
+
+/// <summary>GitHub PR with structured data for TableControl.</summary>
+record GitHubPR(int Number, string Title, string Author, string Branch, string ReviewDecision, bool IsDraft, DateTime CreatedAt, string? RepoSlug);
+
+/// <summary>Token usage stats per model.</summary>
+record TokenModelStats(string Model, int Calls, long PromptTokens, long CompletionTokens, long CachedTokens, double Cost, List<long> Durations);
+
+// ΓöÇΓöÇΓöÇ SharpConsoleUI Dashboard ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
 /// <summary>
-/// SharpConsoleUI-based multi-panel TUI dashboard for Squad Monitor.
+/// Polished SharpConsoleUI-based multi-panel TUI dashboard for Squad Monitor.
 ///
-/// Layout:
-///   ┌─────────────────────────────────────────────────────────────────────────┐
-///   │  Squad Monitor v2 — 2026-03-19 14:23:45 — Next refresh: 4s     header │
-///   ├────────────────────────────────┬────────────────────────────────────────┤
-///   │  GitHub Issues    TableControl │  TabControl [Ralph|Tokens|Sessions]   │
-///   │  #  Title    Author   Age     │  ┌─ Ralph ─────────────────────────┐  │
-///   │  42 Fix auth tamir    2h ago  │  │ ● Running  Round: 12  Fail: 0  │  │
-///   │  ...                          │  │ Last run: 2m ago               │  │
-///   ├────────────────────────────────┤  │ Heartbeat: 45s ago             │  │
-///   │  Pull Requests    TableControl│  └─────────────────────────────────┘  │
-///   │  #  Title  Author Branch Rev  │  ┌─ Tokens ────────────────────────┐  │
-///   │  ...                          │  │ Model  Calls Prompt Cache% Cost │  │
-///   │                               │  │ [table rows...]                 │  │
-///   │                               │  │ ▇▆▅▆▇█▇▆  call rate sparkline  │  │
-///   │                               │  └─────────────────────────────────┘  │
-///   ├───────────────── splitter ────┴────────────────────────────────────────┤
-///   │  ▁▂▃▄▅▆▇█▆▅▃▂▁▂▃▄▅▆▇   activity sparkline (2 rows)                  │
-///   │  Live Agent Feed                                                       │
-///   │  14:23:01 [Ralph-abc] ⚡ bash → git status                             │
-///   │  14:23:05 [CLI-1234]  🔍 grep → "SharpConsoleUI"                      │
-///   │  14:23:08 [Ralph-abc] ✏️  edit → Program.cs                            │
-///   ├───────────────────────────────────────────────────────────────────────-┤
-///   │  q Quit  r Refresh  Tab Switch  1-3 Tabs  ↑↓ Scroll  / Filter        │
-///   └───────────────────────────────────────────────────────────────────────-┘
+/// Layout (--sharp-ui / --beta flag):
+///   ΓöîΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÉ
+///   Γöé  Squad Monitor v2 ΓÇö TUI Dashboard           Γƒ│ HH:MM:SS     Γöé
+///   Γö£ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓö¼ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöñ
+///   Γöé  GitHub Issues  (TableControl)  Γöé  Γöî1 RalphΓö¼2 TokensΓö¼3 SessionsΓöÉ
+///   Γöé  /=filter  ΓåæΓåô=sort             Γöé  Γöé  (TabControl)            Γöé
+///   Γöé  GitHub PRs     (TableControl)  Γöé  Γöé  Ralph heartbeat / token Γöé
+///   Γöé                                 Γöé  Γöé  stats / sessions feed   Γöé
+///   Γö£ΓöÇΓöÇΓöÇΓöÇ HorizontalSplitter ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓö┤ΓöÇΓöÇΓö┤ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöñ
+///   Γöé  ΓûéΓûäΓûåΓûêΓûé Agent Activity (SparklineControl)                     Γöé
+///   Γöé  Live agent feed entries                                      Γöé
+///   Γö£ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöñ
+///   Γöé  q Quit  / Filter  r Refresh  Tab Panel   1 Ralph  2 Tokens Γöé
+///   ΓööΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÿ
 /// </summary>
 public static class SharpUI
 {
     private static ConsoleWindowSystem? _ws;
 
-    // ── Color scheme ────────────────────────────────────────────────────────
-    private static readonly SharpConsoleUI.Color BgDark = new(28, 28, 28);
-    private static readonly SharpConsoleUI.Color BorderNormal = new(88, 88, 88);
-    private static readonly SharpConsoleUI.Color TextMuted = new(128, 128, 128);
-    private static readonly SharpConsoleUI.Color AccentCyan = SharpConsoleUI.Color.Cyan1;
-
-    // ── Data records ────────────────────────────────────────────────────────
-    private record GitHubIssue(string Number, string Title, string Author, string Assignees, string Age, string? RepoSlug);
-    private record GitHubPR(string Number, string Title, string Author, string Branch, string Review, bool IsDraft, string Age, string? RepoSlug);
-    private record TokenModelStats(string Model, int Calls, long Prompt, long Completion, long Cached, double CachePct, double AvgLatencyMs, double Cost);
-    private record FeedEntry(DateTime Time, string Icon, string Text, string Session, string SessionColor);
-
-    // ── Caching infrastructure to reduce CPU/IO/network pressure ──────
-    private static List<GitHubIssue> _cachedIssues = new();
-    private static List<GitHubPR> _cachedPRs = new();
+    // ΓöÇΓöÇ Caching: structured GitHub data ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    private static List<GitHubIssue>? _cachedIssues;
+    private static List<GitHubPR>? _cachedPRs;
     private static DateTime _cachedGitHubTime = DateTime.MinValue;
     private static readonly TimeSpan GitHubCacheTtl = TimeSpan.FromSeconds(60);
 
-    private static (List<LiveSessionInfo> Sessions, List<FeedEntry> Entries)? _cachedFeedData;
+    // ΓöÇΓöÇ Caching: feed / Ralph / tokens ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    private static List<string>? _cachedFeedLines;
     private static DateTime _cachedFeedTime = DateTime.MinValue;
     private static readonly TimeSpan FeedCacheTtl = TimeSpan.FromSeconds(30);
 
-    private static (List<TokenModelStats> Models, string Summary)? _cachedTokenData;
+    private static List<string>? _cachedTokenLines;
     private static DateTime _cachedTokenTime = DateTime.MinValue;
     private static readonly TimeSpan TokenCacheTtl = TimeSpan.FromSeconds(60);
 
-    // ── Activity sparkline rolling history ───────────────────────────────
-    private static readonly List<double> _feedActivityHistory = new();
-    private static DateTime _lastFeedHistoryBucket = DateTime.MinValue;
-    private static int _currentBucketCount;
+    // ΓöÇΓöÇ Sparkline activity history (60 samples ├ù 10 s = 10 minutes) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    private static readonly Queue<double> _activityBuckets = new(60);
+    private static int _lastFeedLineCount = 0;
 
     public static async Task RunAsync(string? teamRoot, int interval = 30)
     {
@@ -95,7 +87,7 @@ public static class SharpUI
 
         try
         {
-            // ── Create window system ─────────────────────────────────────
+            // ΓöÇΓöÇ Window system ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
             var baseOpts = ConsoleWindowSystemOptions.Create(
                 enableMetrics: false,
                 enableFrameRateLimiting: true,
@@ -117,324 +109,229 @@ public static class SharpUI
 
             _ws = new ConsoleWindowSystem(RenderMode.Buffer, null!, options);
 
-            // ── Build controls ───────────────────────────────────────────
-
-            // Header
-            var headerCtrl = Controls.Markup($"[yellow bold] Squad Monitor v2[/] [dim]— {DateTime.Now:yyyy-MM-dd HH:mm:ss}[/]")
+            // ΓöÇΓöÇ Header (sticky top) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var headerCtrl = Controls.Markup($"[yellow bold] Squad Monitor v2 ΓÇö TUI Dashboard [/]  [dim]ΓÇö {DateTime.Now:yyyy-MM-dd HH:mm:ss}[/]")
                 .StickyTop()
                 .WithName("header")
                 .Build();
 
-            var headerRule = Controls.RuleBuilder()
-                .WithColor(new SharpConsoleUI.Color(50, 55, 70))
-                .StickyTop()
-                .Build();
-
-            // Issues table
+            // ΓöÇΓöÇ Issues TableControl ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
             var issuesTable = Controls.Table()
-                .WithTitle("GitHub Issues")
+                .WithTitle(" GitHub Issues (squad) ", TextJustification.Left)
                 .AddColumn("#", TextJustification.Right, 6)
-                .AddColumn("Title", TextJustification.Left)
+                .AddColumn("Title", TextJustification.Left, 40)
                 .AddColumn("Author", TextJustification.Left, 14)
                 .AddColumn("Assignees", TextJustification.Left, 14)
                 .AddColumn("Age", TextJustification.Right, 8)
-                .WithBorderStyle(BorderStyle.Rounded)
-                .WithBorderColor(BorderNormal)
-                .WithHeaderColors(AccentCyan, BgDark)
+                .Interactive()
                 .WithSorting()
                 .WithFiltering()
                 .WithFuzzyFilter()
-                .WithName("issuesTable")
-                .StretchHorizontal()
-                .WithVerticalAlignment(VerticalAlignment.Top)
+                .WithHeaderColors(SColor.White, SColor.Navy)
+                .Rounded()
+                .WithHorizontalAlignment(SHAlign.Stretch)
+                .WithName("issues-table")
                 .Build();
 
-            // PRs table
+            // ΓöÇΓöÇ PRs TableControl ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
             var prsTable = Controls.Table()
-                .WithTitle("Pull Requests")
+                .WithTitle(" Pull Requests (Open) ", TextJustification.Left)
                 .AddColumn("#", TextJustification.Right, 6)
-                .AddColumn("Title", TextJustification.Left)
+                .AddColumn("Title", TextJustification.Left, 36)
                 .AddColumn("Author", TextJustification.Left, 14)
-                .AddColumn("Branch", TextJustification.Left, 22)
-                .AddColumn("Review", TextJustification.Left, 12)
+                .AddColumn("Branch", TextJustification.Left, 20)
+                .AddColumn("Review", TextJustification.Left, 10)
                 .AddColumn("Age", TextJustification.Right, 8)
-                .WithBorderStyle(BorderStyle.Rounded)
-                .WithBorderColor(BorderNormal)
-                .WithHeaderColors(AccentCyan, BgDark)
+                .Interactive()
                 .WithSorting()
                 .WithFiltering()
                 .WithFuzzyFilter()
-                .WithName("prsTable")
-                .StretchHorizontal()
-                .WithVerticalAlignment(VerticalAlignment.Fill)
+                .WithHeaderColors(SColor.White, SColor.Navy)
+                .Rounded()
+                .WithHorizontalAlignment(SHAlign.Stretch)
+                .WithName("prs-table")
                 .Build();
 
-            // Left column scroll panel
-            var leftScrollPanel = Controls.ScrollablePanel()
+            // ΓöÇΓöÇ Left panel: Issues + PRs in a ScrollablePanel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var leftPanel = Controls.ScrollablePanel()
                 .AddControl(issuesTable)
                 .AddControl(prsTable)
                 .WithAutoScroll(false)
                 .WithMouseWheel(true)
                 .WithScrollbar(true)
-                .WithName("leftscroll")
+                .WithName("left-panel")
                 .Build();
 
-            // Right panel: TabControl with Ralph / Tokens / Sessions
-
-            // Ralph tab content
-            var ralphMarkup = Controls.Markup("[dim]  Loading Ralph status...[/]")
-                .WithName("ralphMarkup")
+            // ΓöÇΓöÇ Tab content: Ralph heartbeat ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var ralphCtrl = Controls.Markup("[dim]  Loading Ralph status...[/]")
+                .WithName("ralph")
                 .Build();
-            var ralphScroll = Controls.ScrollablePanel()
-                .AddControl(ralphMarkup)
+            var ralphPanel = Controls.ScrollablePanel()
+                .AddControl(ralphCtrl)
                 .WithAutoScroll(false)
                 .WithMouseWheel(true)
                 .WithScrollbar(true)
-                .WithName("ralphScroll")
                 .Build();
 
-            // Tokens tab content
-            var tokenTable = Controls.Table()
-                .AddColumn("Model", TextJustification.Left)
-                .AddColumn("Calls", TextJustification.Right, 7)
-                .AddColumn("Prompt", TextJustification.Right, 10)
-                .AddColumn("Compl", TextJustification.Right, 10)
-                .AddColumn("Cache%", TextJustification.Right, 7)
-                .AddColumn("Latency", TextJustification.Right, 8)
-                .AddColumn("Cost", TextJustification.Right, 8)
-                .WithBorderStyle(BorderStyle.Rounded)
-                .WithBorderColor(BorderNormal)
-                .WithHeaderColors(SharpConsoleUI.Color.Magenta1, BgDark)
-                .NoBorder()
-                .WithName("tokenTable")
-                .StretchHorizontal()
+            // ΓöÇΓöÇ Tab content: Token usage stats ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var tokenCtrl = Controls.Markup("[dim]  Loading token stats...[/]")
+                .WithName("tokens")
                 .Build();
-
-            var tokenSpark = new SparklineBuilder()
-                .WithName("tokenSpark")
-                .WithHeight(2)
-                .WithAutoFitDataPoints()
-                .WithMode(SparklineMode.Block)
-                .WithBarColor(SharpConsoleUI.Color.Magenta1)
-                .WithGradient("warm")
-                .WithAlignment(HorizontalAlignment.Stretch)
-                .WithMargin(0, 1, 0, 0)
-                .Build();
-
-            var tokenSummaryMarkup = Controls.Markup("[dim]  Loading token stats...[/]")
-                .WithName("tokenSummary")
-                .Build();
-
-            var tokensScroll = Controls.ScrollablePanel()
-                .AddControl(tokenTable)
-                .AddControl(tokenSpark)
-                .AddControl(tokenSummaryMarkup)
+            var tokenPanel = Controls.ScrollablePanel()
+                .AddControl(tokenCtrl)
                 .WithAutoScroll(false)
                 .WithMouseWheel(true)
                 .WithScrollbar(true)
-                .WithName("tokensScroll")
                 .Build();
 
-            // Sessions tab content
-            var sessionMarkup = Controls.Markup("[dim]  Loading sessions...[/]")
-                .WithName("sessionMarkup")
+            // ΓöÇΓöÇ Tab content: Sessions feed ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var sessionsCtrl = Controls.Markup("[dim]  Loading sessions...[/]")
+                .WithName("sessions")
                 .Build();
-            var sessionsScroll = Controls.ScrollablePanel()
-                .AddControl(sessionMarkup)
-                .WithAutoScroll(false)
+            var sessionsPanel = Controls.ScrollablePanel()
+                .AddControl(sessionsCtrl)
+                .WithAutoScroll(true)
                 .WithMouseWheel(true)
                 .WithScrollbar(true)
-                .WithName("sessionsScroll")
                 .Build();
 
-            // Tab control
-            var rightTabs = Controls.TabControl()
-                .AddTab("Ralph", ralphScroll)
-                .AddTab("Tokens", tokensScroll)
-                .AddTab("Sessions", sessionsScroll)
-                .WithName("rightTabs")
-                .Fill()
+            // ΓöÇΓöÇ TabControl (right panel) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var tabControl = Controls.TabControl()
+                .AddTab("1 Ralph", ralphPanel)
+                .AddTab("2 Tokens", tokenPanel)
+                .AddTab("3 Sessions", sessionsPanel)
+                .WithVerticalAlignment(SVAlign.Fill)
+                .WithName("tabs")
                 .Build();
 
-            // Main grid — needs VerticalAlignment.Fill + explicit Height for splitter resize
-            var grid = Controls.HorizontalGrid()
+            // ΓöÇΓöÇ Main HorizontalGrid (left=issues+PRs | right=tabs) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var mainGrid = Controls.HorizontalGrid()
                 .Column(leftCol =>
                 {
                     leftCol.Flex(6);
-                    leftCol.Add(leftScrollPanel);
+                    leftCol.Add(leftPanel);
                 })
                 .Column(rightCol =>
                 {
                     rightCol.Flex(4);
-                    rightCol.Add(rightTabs);
+                    rightCol.Add(tabControl);
                 })
                 .WithSplitterAfter(0)
-                .WithVerticalAlignment(VerticalAlignment.Fill)
                 .Build();
 
-            // Feed section
-            var feedSpark = new SparklineBuilder()
-                .WithName("feedSpark")
-                .WithHeight(3)
-                .WithAutoFitDataPoints()
-                .WithMode(SparklineMode.Block)
-                .WithBarColor(SharpConsoleUI.Color.Green)
-                .WithGradient(SharpConsoleUI.Color.DarkGreen, SharpConsoleUI.Color.Green, SharpConsoleUI.Color.Cyan1)
-                .WithTitle("Activity", SharpConsoleUI.Color.Green)
-                .WithTitlePosition(TitlePosition.Bottom)
-                .WithBaseline(true, '┈', new SharpConsoleUI.Color(40, 50, 40), TitlePosition.Bottom)
-                .WithInlineTitleBaseline(true)
-                .WithBorder(BorderStyle.Rounded, new SharpConsoleUI.Color(50, 70, 50))
-                .WithAlignment(HorizontalAlignment.Stretch)
+            // ΓöÇΓöÇ SparklineControl: agent activity (greenΓåÆcyan gradient) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var sparkline = Controls.Sparkline()
+                .WithTitle(" Agent Activity ")
+                .WithBorder(BorderStyle.Single, SColor.Cyan1)
+                .WithBarColor(SColor.Green)
+                .WithGradient(ColorGradient.FromColors(new[] { SColor.Green, SColor.Cyan1 }))
+                .WithHeight(5)
+                .WithAutoFitDataPoints(true)
+                .WithName("sparkline")
                 .Build();
 
-            var feedRule = Controls.RuleBuilder()
-                .WithTitle("Live Agent Feed")
-                .WithColor(SharpConsoleUI.Color.Green)
+            // ΓöÇΓöÇ Feed markup (live agent events) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var feedCtrl = Controls.Markup("[dim]  Loading live agent feed...[/]")
+                .WithName("feed")
                 .Build();
-
-            var feedMarkup = Controls.Markup("[dim]  Loading live agent feed...[/]")
-                .WithName("feedMarkup")
-                .Build();
-
-            var feedPanel = Controls.ScrollablePanel()
-                .AddControl(feedSpark)
-                .AddControl(feedRule)
-                .AddControl(feedMarkup)
+            var feedScrollPanel = Controls.ScrollablePanel()
+                .AddControl(feedCtrl)
                 .WithAutoScroll(true)
                 .WithMouseWheel(true)
                 .WithScrollbar(true)
-                .WithVerticalAlignment(VerticalAlignment.Fill)
-                .WithName("feedpanel")
-                .Build();
-            feedPanel.Height = 16;
-
-            // Horizontal splitter between grid and feed — auto-discovers neighbors
-            var hSplitter = Controls.HorizontalSplitter()
-                .WithMinHeights(8, 6)
-                .WithName("hSplitter")
+                .WithName("feed-panel")
                 .Build();
 
-            // Status bar with clickable items
-            Action doRefresh = () =>
-            {
-                _cachedIssues = new();
-                _cachedPRs = new();
-                _cachedGitHubTime = DateTime.MinValue;
-                _cachedFeedData = null;
-                _cachedTokenData = null;
-                RefreshAllPanels(headerCtrl, issuesTable, prsTable, ralphMarkup,
-                    tokenTable, tokenSpark, tokenSummaryMarkup,
-                    feedMarkup, feedSpark, sessionMarkup,
-                    teamRoot, userProfile, disableGitHub, interval);
-            };
+            // ΓöÇΓöÇ Feed container: sparkline on top, feed entries below ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var feedContainer = Controls.ScrollablePanel()
+                .AddControl(sparkline)
+                .AddControl(feedCtrl)
+                .WithAutoScroll(true)
+                .WithMouseWheel(true)
+                .WithScrollbar(true)
+                .WithName("feed-container")
+                .Build();
 
+            // ΓöÇΓöÇ HorizontalSplitter: main grid Γåò feed area ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var splitter = Controls.HorizontalSplitter()
+                .WithControls(mainGrid, feedContainer)
+                .WithMinHeights(15, 7)
+                .WithFocusedColors(SColor.SteelBlue, SColor.Grey23)
+                .WithDraggingColors(SColor.Yellow, SColor.Grey23)
+                .WithName("main-splitter")
+                .Build();
+
+            // ΓöÇΓöÇ StatusBarControl ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
             var statusBar = Controls.StatusBar()
                 .AddLeft("q", "Quit", () => _ws?.Shutdown(0))
-                .AddLeft("r", "Refresh", doRefresh)
-                .AddLeftSeparator()
-                .AddLeft("Tab", "Switch Panel")
-                .AddLeft("1-3", "Tabs", () => rightTabs.ActiveTabIndex = (rightTabs.ActiveTabIndex + 1) % 3)
-                .AddLeftSeparator()
                 .AddLeft("/", "Filter")
-                .AddRight("^", "Scroll Up")
-                .AddRight("v", "Scroll Down")
-                .WithAboveLine(true)
-                .WithAboveLineColor(new SharpConsoleUI.Color(50, 55, 70))
-                .WithBackgroundColor(new SharpConsoleUI.Color(20, 22, 35))
-                .WithForegroundColor(new SharpConsoleUI.Color(180, 180, 180))
-                .WithShortcutForegroundColor(SharpConsoleUI.Color.Cyan1)
+                .AddLeft("r", "Refresh")
+                .AddLeft("Tab", "Next panel")
+                .AddLeftSeparator()
+                .AddRight("3", "Sessions", () => tabControl.SwitchToTab("3 Sessions"))
+                .AddRight("2", "Tokens", () => tabControl.SwitchToTab("2 Tokens"))
+                .AddRight("1", "Ralph", () => tabControl.SwitchToTab("1 Ralph"))
+                .WithAboveLine()
+                .WithBackgroundColor(SColor.Grey11)
+                .WithShortcutForegroundColor(SColor.Cyan1)
                 .StickyBottom()
                 .WithName("statusbar")
                 .Build();
 
-            // Panel focus tracking for Tab key navigation
-            var scrollPanels = new ScrollablePanelControl[] { leftScrollPanel, feedPanel };
-            var panelNames = new[] { "Issues/PRs", "Agent Feed" };
-            int focusedIdx = 0;
+            // ΓöÇΓöÇ Window with gradient background and steel-blue border ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var bgGradient = ColorGradient.FromColors(new[] { SColor.Navy, SColor.Black });
 
-            // Background gradient: dark blue-black
-            var bgGradient = ColorGradient.FromColors(
-                new SharpConsoleUI.Color(20, 25, 45),
-                new SharpConsoleUI.Color(8, 8, 16));
-
-            // ── Build the main window ─────────────────────────────────────
             var window = new WindowBuilder(_ws)
+                .WithTitle(" Squad Monitor v2 ")
                 .Maximized()
-                .HideTitle()
                 .Resizable(false)
                 .Movable(false)
                 .HideTitleButtons()
-                .WithActiveBorderColor(new SharpConsoleUI.Color(60, 90, 140))
-                .WithInactiveBorderColor(new SharpConsoleUI.Color(60, 90, 140))
                 .WithBackgroundGradient(bgGradient, GradientDirection.Vertical)
+                .WithBorderColor(SColor.SteelBlue)
+                .WithActiveBorderColor(SColor.SteelBlue)
+                .WithInactiveBorderColor(SColor.Grey)
                 .AddControl(headerCtrl)
-                .AddControl(headerRule)
-                .AddControl(grid)
-                .AddControl(hSplitter)
-                .AddControl(feedPanel)
+                .AddControl(splitter)
                 .AddControl(statusBar)
                 .WithAsyncWindowThread(async (win, ct) =>
                 {
                     // Initial data load
-                    RefreshAllPanels(headerCtrl, issuesTable, prsTable, ralphMarkup,
-                        tokenTable, tokenSpark, tokenSummaryMarkup,
-                        feedMarkup, feedSpark, sessionMarkup,
-                        teamRoot, userProfile, disableGitHub, interval);
+                    RefreshAllPanels(headerCtrl, issuesTable, prsTable, ralphCtrl, tokenCtrl,
+                        sessionsCtrl, feedCtrl, sparkline, teamRoot, userProfile, disableGitHub);
 
                     while (!ct.IsCancellationRequested)
                     {
-                        try
-                        {
-                            // Update countdown in header each second
-                            var refreshAt = DateTime.Now.AddSeconds(interval);
-                            while (DateTime.Now < refreshAt && !ct.IsCancellationRequested)
-                            {
-                                var remaining = (int)(refreshAt - DateTime.Now).TotalSeconds;
-                                headerCtrl.SetContent(new List<string>
-                                {
-                                    $"[yellow bold] Squad Monitor v2[/] [dim]— {DateTime.Now:yyyy-MM-dd HH:mm:ss} — Next refresh: {remaining}s[/]"
-                                });
-                                await Task.Delay(1000, ct);
-                            }
-                        }
+                        try { await Task.Delay(interval * 1000, ct); }
                         catch (OperationCanceledException) { break; }
 
-                        RefreshAllPanels(headerCtrl, issuesTable, prsTable, ralphMarkup,
-                            tokenTable, tokenSpark, tokenSummaryMarkup,
-                            feedMarkup, feedSpark, sessionMarkup,
-                            teamRoot, userProfile, disableGitHub, interval);
+                        RefreshAllPanels(headerCtrl, issuesTable, prsTable, ralphCtrl, tokenCtrl,
+                            sessionsCtrl, feedCtrl, sparkline, teamRoot, userProfile, disableGitHub);
                     }
                 })
                 .OnKeyPressed((sender, e) =>
                 {
-                    switch (e.KeyInfo.Key)
+                    var key = e.KeyInfo.Key;
+                    var ch = e.KeyInfo.KeyChar;
+
+                    if (key == ConsoleKey.Q)
+                        _ws?.Shutdown(0);
+                    else if (key == ConsoleKey.R)
                     {
-                        case ConsoleKey.Q:
-                            _ws?.Shutdown(0);
-                            break;
-                        case ConsoleKey.R:
-                            doRefresh();
-                            break;
-                        case ConsoleKey.Tab:
-                            focusedIdx = (focusedIdx + 1) % scrollPanels.Length;
-                            break;
-                        case ConsoleKey.UpArrow:
-                            scrollPanels[focusedIdx].ScrollVerticalBy(-3);
-                            break;
-                        case ConsoleKey.DownArrow:
-                            scrollPanels[focusedIdx].ScrollVerticalBy(3);
-                            break;
-                        case ConsoleKey.D1:
-                            rightTabs.ActiveTabIndex = 0;
-                            break;
-                        case ConsoleKey.D2:
-                            rightTabs.ActiveTabIndex = 1;
-                            break;
-                        case ConsoleKey.D3:
-                            rightTabs.ActiveTabIndex = 2;
-                            break;
+                        // Force-refresh: invalidate all caches
+                        _cachedIssues = null;
+                        _cachedPRs = null;
+                        _cachedFeedLines = null;
+                        _cachedTokenLines = null;
+                        RefreshAllPanels(headerCtrl, issuesTable, prsTable, ralphCtrl, tokenCtrl,
+                            sessionsCtrl, feedCtrl, sparkline, teamRoot, userProfile, disableGitHub);
                     }
+                    else if (ch == '1' || key == ConsoleKey.D1)
+                        tabControl.SwitchToTab("1 Ralph");
+                    else if (ch == '2' || key == ConsoleKey.D2)
+                        tabControl.SwitchToTab("2 Tokens");
+                    else if (ch == '3' || key == ConsoleKey.D3)
+                        tabControl.SwitchToTab("3 Sessions");
                 })
                 .Build();
 
@@ -445,7 +342,11 @@ public static class SharpUI
         catch (Exception ex) when (ex.Message.Contains("console mode") || ex.Message.Contains("console handle"))
         {
             Console.Error.WriteLine();
-            Console.Error.WriteLine("SharpConsoleUI requires a real interactive terminal.");
+            Console.Error.WriteLine("ΓòöΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòù");
+            Console.Error.WriteLine("Γòæ  SharpConsoleUI requires a real interactive terminal.       Γòæ");
+            Console.Error.WriteLine("Γòæ  Run this from a standard terminal (cmd, PowerShell, etc.)  Γòæ");
+            Console.Error.WriteLine("Γòæ  ΓÇö not from a piped/redirected environment.                 Γòæ");
+            Console.Error.WriteLine("ΓòÜΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓò¥");
             Console.Error.WriteLine($"  Technical: {ex.Message}");
         }
         catch (Exception ex)
@@ -455,54 +356,69 @@ public static class SharpUI
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
     //  REFRESH LOGIC
-    // ═══════════════════════════════════════════════════════════════════════
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
     private static void RefreshAllPanels(
         MarkupControl header,
-        TableControl issuesTable, TableControl prsTable,
-        MarkupControl ralphMarkup,
-        TableControl tokenTable, SparklineControl tokenSpark, MarkupControl tokenSummary,
-        MarkupControl feedMarkup, SparklineControl feedSpark, MarkupControl sessionMarkup,
-        string teamRoot, string userProfile, bool disableGitHub, int interval)
+        TableControl issuesTable,
+        TableControl prsTable,
+        MarkupControl ralphCtrl,
+        MarkupControl tokenCtrl,
+        MarkupControl sessionsCtrl,
+        MarkupControl feedCtrl,
+        SparklineControl sparkline,
+        string teamRoot, string userProfile, bool disableGitHub)
     {
         try
         {
             var now = DateTime.Now;
 
+            // ΓöÇΓöÇ Header timestamp ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
             header.SetContent(new List<string>
             {
-                $"[yellow bold] Squad Monitor v2[/] [dim]— {now:yyyy-MM-dd HH:mm:ss} — Next refresh: {interval}s[/]"
+                $"[yellow bold] Squad Monitor v2 ΓÇö TUI Dashboard [/]  [dim]ΓÇö {now:yyyy-MM-dd HH:mm:ss} ΓÇö Γƒ│ {now:HH:mm:ss}[/]"
             });
 
-            // GitHub: cache for 60s
-            if (_cachedIssues.Count == 0 || _cachedPRs.Count == 0 || (now - _cachedGitHubTime) >= GitHubCacheTtl)
+            // ΓöÇΓöÇ GitHub Issues & PRs (cache 60s) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            if (_cachedIssues == null || _cachedPRs == null || (now - _cachedGitHubTime) >= GitHubCacheTtl)
             {
-                (_cachedIssues, _cachedPRs) = GetGitHubData(teamRoot, disableGitHub);
+                var repoSlug = GetGitHubRepoSlug(teamRoot);
+                _cachedIssues = disableGitHub ? new List<GitHubIssue>() : FetchIssues(teamRoot, repoSlug);
+                _cachedPRs = disableGitHub ? new List<GitHubPR>() : FetchPRs(teamRoot, repoSlug);
                 _cachedGitHubTime = now;
             }
-            UpdateIssuesTable(issuesTable, _cachedIssues);
-            UpdatePrsTable(prsTable, _cachedPRs);
+            PopulateIssuesTable(issuesTable, _cachedIssues, disableGitHub);
+            PopulatePRsTable(prsTable, _cachedPRs, disableGitHub);
 
-            // Ralph heartbeat: always refresh (cheap file read)
-            ralphMarkup.SetContent(GetRalphMarkup(userProfile));
+            // ΓöÇΓöÇ Ralph heartbeat (always fresh ΓÇö cheap file read) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            ralphCtrl.SetContent(GetRalphLines(userProfile));
 
-            // Token stats: cache for 60s
-            if (_cachedTokenData == null || (now - _cachedTokenTime) >= TokenCacheTtl)
+            // ΓöÇΓöÇ Token stats (cache 60s) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            if (_cachedTokenLines == null || (now - _cachedTokenTime) >= TokenCacheTtl)
             {
-                _cachedTokenData = GetTokenData(userProfile);
+                _cachedTokenLines = GetTokenLines(userProfile);
                 _cachedTokenTime = now;
             }
-            UpdateTokenTable(tokenTable, tokenSpark, tokenSummary, _cachedTokenData.Value);
+            tokenCtrl.SetContent(_cachedTokenLines);
 
-            // Feed: cache for 30s
-            if (_cachedFeedData == null || (now - _cachedFeedTime) >= FeedCacheTtl)
+            // ΓöÇΓöÇ Sessions feed (cache 30s) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            if (_cachedFeedLines == null || (now - _cachedFeedTime) >= FeedCacheTtl)
             {
-                _cachedFeedData = GetFeedData(userProfile, 30);
+                _cachedFeedLines = GetFeedLines(userProfile, 30);
                 _cachedFeedTime = now;
             }
-            UpdateFeed(feedMarkup, feedSpark, sessionMarkup, _cachedFeedData.Value);
+            sessionsCtrl.SetContent(_cachedFeedLines);
+            feedCtrl.SetContent(_cachedFeedLines);
+
+            // ΓöÇΓöÇ Sparkline activity update ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+            var currentFeedCount = _cachedFeedLines?.Count ?? 0;
+            var delta = Math.Max(0, currentFeedCount - _lastFeedLineCount);
+            _lastFeedLineCount = currentFeedCount;
+            _activityBuckets.Enqueue(delta);
+            if (_activityBuckets.Count > 60) _activityBuckets.Dequeue();
+            sparkline.SetDataPoints(_activityBuckets);
         }
         catch
         {
@@ -510,292 +426,129 @@ public static class SharpUI
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  TABLE UPDATE METHODS
-    // ═══════════════════════════════════════════════════════════════════════
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+    //  DATA: GITHUB ISSUES & PRS (structured records for TableControl)
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
-    private static void UpdateIssuesTable(TableControl table, List<GitHubIssue> issues)
+    private static List<GitHubIssue> FetchIssues(string teamRoot, string? repoSlug)
+    {
+        var result = new List<GitHubIssue>();
+        var output = RunCmd("gh", "issue list --label squad --json number,title,author,createdAt,assignees --limit 20", teamRoot);
+        if (output == null) return result;
+        try
+        {
+            using var doc = JsonDocument.Parse(output);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var num = el.TryGetProperty("number", out var n) ? n.GetInt32() : 0;
+                var title = el.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                var author = el.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var al) ? al.GetString() ?? "" : "";
+                DateTime? createdAt = el.TryGetProperty("createdAt", out var c) && DateTime.TryParse(c.GetString(), out var dt) ? dt.ToLocalTime() : null;
+
+                var assignees = new List<string>();
+                if (el.TryGetProperty("assignees", out var asgn))
+                    foreach (var a2 in asgn.EnumerateArray())
+                        if (a2.TryGetProperty("login", out var login)) assignees.Add(login.GetString() ?? "");
+
+                result.Add(new GitHubIssue(num, title, author, string.Join(", ", assignees), createdAt ?? DateTime.UtcNow, repoSlug));
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    private static List<GitHubPR> FetchPRs(string teamRoot, string? repoSlug)
+    {
+        var result = new List<GitHubPR>();
+        var output = RunCmd("gh", "pr list --json number,title,author,createdAt,headRefName,reviewDecision,isDraft --limit 20", teamRoot);
+        if (output == null) return result;
+        try
+        {
+            using var doc = JsonDocument.Parse(output);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                var num = el.TryGetProperty("number", out var n) ? n.GetInt32() : 0;
+                var title = el.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                var author = el.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var al) ? al.GetString() ?? "" : "";
+                var branch = el.TryGetProperty("headRefName", out var b) ? b.GetString() ?? "" : "";
+                var review = el.TryGetProperty("reviewDecision", out var r) ? r.GetString() ?? "" : "";
+                var isDraft = el.TryGetProperty("isDraft", out var d) && d.GetBoolean();
+                DateTime? createdAt = el.TryGetProperty("createdAt", out var c) && DateTime.TryParse(c.GetString(), out var dt) ? dt.ToLocalTime() : null;
+
+                result.Add(new GitHubPR(num, title, author, branch, review, isDraft, createdAt ?? DateTime.UtcNow, repoSlug));
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    private static void PopulateIssuesTable(TableControl table, List<GitHubIssue> issues, bool disableGitHub)
     {
         table.ClearRows();
+        if (disableGitHub)
+        {
+            table.AddRow(new[] { "ΓÇö", "(gh CLI not available)", "", "", "" });
+            return;
+        }
         if (issues.Count == 0)
         {
-            table.AddRow("", "[dim]No open issues with 'squad' label[/]", "", "", "");
+            table.AddRow(new[] { "ΓÇö", "No open issues with 'squad' label", "", "", "" });
             return;
         }
         foreach (var issue in issues)
         {
-            table.AddRow(
-                $"[cyan]#{Esc(issue.Number)}[/]",
-                Esc(issue.Title),
-                $"[yellow]{Esc(issue.Author)}[/]",
-                issue.Assignees,
-                $"[dim]{Esc(issue.Age)}[/]"
-            );
+            var title = issue.Title.Length > 40 ? issue.Title[..37] + "..." : issue.Title;
+            var author = issue.Author.Length > 12 ? issue.Author[..12] : issue.Author;
+            var assignees = issue.Assignees.Length > 14 ? issue.Assignees[..11] + "..." : issue.Assignees;
+            var age = FormatAge(DateTime.Now - issue.CreatedAt);
+            table.AddRow(new[] { $"#{issue.Number}", title, author, assignees.Length > 0 ? assignees : "ΓÇö", age });
         }
     }
 
-    private static void UpdatePrsTable(TableControl table, List<GitHubPR> prs)
+    private static void PopulatePRsTable(TableControl table, List<GitHubPR> prs, bool disableGitHub)
     {
         table.ClearRows();
+        if (disableGitHub)
+        {
+            table.AddRow(new[] { "ΓÇö", "(gh CLI not available)", "", "", "", "" });
+            return;
+        }
         if (prs.Count == 0)
         {
-            table.AddRow("", "[dim]No open pull requests[/]", "", "", "", "");
+            table.AddRow(new[] { "ΓÇö", "No open pull requests", "", "", "", "" });
             return;
         }
         foreach (var pr in prs)
         {
-            var (reviewColor, reviewDisplay) = pr.Review switch
+            var title = pr.Title.Length > 36 ? pr.Title[..33] + "..." : pr.Title;
+            var author = pr.Author.Length > 12 ? pr.Author[..12] : pr.Author;
+            var branch = pr.Branch.Length > 18 ? pr.Branch[..15] + "..." : pr.Branch;
+            var reviewLabel = pr.ReviewDecision switch
             {
-                "APPROVED" => ("green", "Approved"),
-                "CHANGES_REQUESTED" => ("red", "Changes"),
-                "REVIEW_REQUIRED" => ("yellow", "Pending"),
-                _ => pr.IsDraft ? ("dim", "Draft") : ("dim", "---")
+                "APPROVED" => "Γ£à Approved",
+                "CHANGES_REQUESTED" => "Γ¥î Changes",
+                "REVIEW_REQUIRED" => "ΓÅ│ Pending",
+                _ => pr.IsDraft ? "≡ƒô¥ Draft" : "ΓÇö"
             };
-
-            table.AddRow(
-                $"[cyan]#{Esc(pr.Number)}[/]",
-                Esc(pr.Title),
-                $"[yellow]{Esc(pr.Author)}[/]",
-                $"[dim]{Esc(pr.Branch)}[/]",
-                $"[{reviewColor}]{reviewDisplay}[/]",
-                $"[dim]{Esc(pr.Age)}[/]"
-            );
+            var age = FormatAge(DateTime.Now - pr.CreatedAt);
+            table.AddRow(new[] { $"#{pr.Number}", title, author, branch, reviewLabel, age });
         }
     }
 
-    private static void UpdateTokenTable(TableControl table, SparklineControl spark, MarkupControl summary,
-        (List<TokenModelStats> Models, string Summary) data)
-    {
-        table.ClearRows();
-        if (data.Models.Count == 0)
-        {
-            table.AddRow("[dim]No usage data[/]", "", "", "", "", "", "");
-            summary.SetContent(new List<string> { "[dim]  No token usage data in recent logs[/]" });
-            return;
-        }
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+    //  DATA: RALPH WATCH STATUS
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
-        var callHistory = new List<double>();
-        foreach (var m in data.Models.OrderByDescending(x => x.Calls))
-        {
-            var model = m.Model.Replace("claude-", "").Replace("gpt-", "");
-            if (model.Length > 22) model = model[..19] + "...";
-            var cacheClr = m.CachePct > 50 ? "green" : m.CachePct > 20 ? "yellow" : "dim";
-            var costClr = m.Cost < 5 ? "green" : m.Cost < 20 ? "yellow" : "red";
-            var avgLat = m.AvgLatencyMs > 0 ? $"{m.AvgLatencyMs / 1000.0:F1}s" : "---";
-            var latClr = m.AvgLatencyMs > 15000 ? "red" : m.AvgLatencyMs > 5000 ? "yellow" : "green";
-
-            table.AddRow(
-                $"[cyan]{Esc(model)}[/]",
-                $"[white]{m.Calls}[/]",
-                $"[blue]{FmtTok(m.Prompt)}[/]",
-                $"[green]{FmtTok(m.Completion)}[/]",
-                $"[{cacheClr}]{m.CachePct:F0}%[/]",
-                $"[{latClr}]{avgLat}[/]",
-                $"[{costClr}]${m.Cost:F2}[/]"
-            );
-            callHistory.Add(m.Calls);
-        }
-
-        if (callHistory.Count > 0)
-            spark.SetDataPoints(callHistory);
-
-        summary.SetContent(new List<string> { data.Summary });
-    }
-
-    private static void UpdateFeed(MarkupControl feedMarkup, SparklineControl feedSpark,
-        MarkupControl sessionMarkup, (List<LiveSessionInfo> Sessions, List<FeedEntry> Entries) data)
-    {
-        // Session tab
-        var sessionLines = new List<string>();
-        if (data.Sessions.Count > 0)
-        {
-            var now = DateTime.Now;
-            var activeCount = data.Sessions.Count(s => s.IsActive);
-            var totalProcesses = data.Sessions.Sum(s => s.ProcessCount);
-            var totalMcps = data.Sessions.Sum(s => s.McpCount);
-            sessionLines.Add($" [bold]Sessions:[/] {data.Sessions.Count} ({activeCount} active)  " +
-                             $"[bold]Agents:[/] {totalProcesses}  [bold]MCPs:[/] {totalMcps}");
-            sessionLines.Add("");
-
-            foreach (var session in data.Sessions.OrderByDescending(s => s.LastWrite))
-            {
-                var indicator = session.IsActive ? "[green]>[/]" : "[dim].[/]";
-                var ageStr = FormatAge(session.Age);
-                var lastStr = FormatAge(now - session.LastWrite);
-                var typeColor = session.Type switch
-                {
-                    "Ralph" => "cyan",
-                    "CLI" => "yellow",
-                    "Copilot" => "blue",
-                    "Interactive" => "green",
-                    "Update" => "magenta",
-                    _ => "dim"
-                };
-                var cwdPart = string.IsNullOrEmpty(session.Cwd) ? "" : $" [dim]({Esc(session.Cwd)})[/]";
-                sessionLines.Add($" {indicator} [{typeColor}]{Esc(session.Name)}[/]{cwdPart}  [dim]age:{ageStr}  last:{lastStr}  procs:{session.ProcessCount}[/]");
-            }
-        }
-        else
-        {
-            sessionLines.Add("[dim]  No active sessions[/]");
-        }
-        sessionMarkup.SetContent(sessionLines);
-
-        // Feed sparkline: track events per 30-second bucket
-        var bucketTime = new DateTime(DateTime.Now.Year, DateTime.Now.Month, DateTime.Now.Day,
-            DateTime.Now.Hour, DateTime.Now.Minute, DateTime.Now.Second / 30 * 30);
-        var bucketEnd = bucketTime.AddSeconds(30);
-        var bucketCount = data.Entries.Count(e => e.Time >= bucketTime && e.Time < bucketEnd);
-        if (bucketTime != _lastFeedHistoryBucket)
-        {
-            if (_lastFeedHistoryBucket != DateTime.MinValue)
-                _feedActivityHistory.Add(_currentBucketCount);
-            _currentBucketCount = bucketCount;
-            _lastFeedHistoryBucket = bucketTime;
-            while (_feedActivityHistory.Count > 60)
-                _feedActivityHistory.RemoveAt(0);
-        }
-        else
-        {
-            _currentBucketCount = bucketCount;
-        }
-
-        if (_feedActivityHistory.Count > 0)
-            feedSpark.SetDataPoints(_feedActivityHistory);
-
-        // Feed markup
-        var feedLines = new List<string>();
-        if (data.Entries.Count == 0)
-        {
-            feedLines.Add("[dim]  No recent agent activity[/]");
-        }
-        else
-        {
-            var sorted = data.Entries.OrderByDescending(e => e.Time).Take(50).Reverse().ToList();
-
-            // Legend
-            var sessionNames = sorted.Select(e => e.Session).Distinct().ToList();
-            var palette = new[] { "cyan", "green", "yellow", "magenta", "blue", "red" };
-            var sessionColors = new Dictionary<string, string>();
-            for (int i = 0; i < sessionNames.Count; i++)
-                sessionColors[sessionNames[i]] = palette[i % palette.Length];
-
-            var legendParts = sessionNames.Select(s => $"[{sessionColors[s]}]|[/] {Esc(s)}");
-            feedLines.Add($" {string.Join("  ", legendParts)}");
-            feedLines.Add(" [dim]" + new string('-', 80) + "[/]");
-
-            foreach (var entry in sorted)
-            {
-                var clr = sessionColors.GetValueOrDefault(entry.Session, "white");
-                var timeStr = entry.Time.ToString("HH:mm:ss");
-                var icon = string.IsNullOrEmpty(entry.Icon) ? ">" : entry.Icon;
-                var text = entry.Text;
-                if (text.Length > 85) text = text[..82] + "...";
-                feedLines.Add($" [dim]{timeStr}[/] [{clr}][{Esc(entry.Session)}][/] {icon} {Esc(text)}");
-            }
-
-            feedLines.Add("");
-            feedLines.Add($" [dim]Showing {sorted.Count} of {data.Entries.Count} entries from {sessionNames.Count} session(s)[/]");
-        }
-        feedMarkup.SetContent(feedLines);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    //  DATA: GITHUB ISSUES & PRS (structured)
-    // ═══════════════════════════════════════════════════════════════════════
-
-    private static (List<GitHubIssue>, List<GitHubPR>) GetGitHubData(string teamRoot, bool disableGitHub)
-    {
-        var issues = new List<GitHubIssue>();
-        var prs = new List<GitHubPR>();
-
-        if (disableGitHub)
-            return (issues, prs);
-
-        var repoSlug = GetGitHubRepoSlug(teamRoot);
-
-        // Issues
-        var issueOutput = RunCmd("gh", "issue list --label squad --json number,title,author,createdAt,assignees --limit 12", teamRoot);
-        if (issueOutput != null)
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(issueOutput);
-                foreach (var issue in doc.RootElement.EnumerateArray())
-                {
-                    var num = issue.TryGetProperty("number", out var n) ? n.GetInt32().ToString() : "?";
-                    var title = issue.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
-                    var author = issue.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var al) ? al.GetString() ?? "" : "";
-                    var age = issue.TryGetProperty("createdAt", out var c) && DateTime.TryParse(c.GetString(), out var created)
-                        ? FormatAge(DateTime.Now - created.ToLocalTime()) : "?";
-
-                    var assignees = new List<string>();
-                    if (issue.TryGetProperty("assignees", out var asgn))
-                        foreach (var a2 in asgn.EnumerateArray())
-                            if (a2.TryGetProperty("login", out var login))
-                                assignees.Add(login.GetString() ?? "");
-
-                    if (title.Length > 40) title = title[..37] + "...";
-                    if (author.Length > 12) author = author[..12];
-                    var asgnStr = assignees.Count > 0 ? string.Join(",", assignees.Select(x => x.Length > 12 ? x[..12] : x)) : "[dim]none[/]";
-
-                    issues.Add(new GitHubIssue(num, title, author, asgnStr, age, repoSlug));
-                }
-            }
-            catch (Exception ex)
-            {
-                issues.Add(new GitHubIssue("!", $"Error parsing issues: {ex.Message}", "", "", "", repoSlug));
-            }
-        }
-
-        // PRs
-        var prOutput = RunCmd("gh", "pr list --json number,title,author,createdAt,headRefName,reviewDecision,isDraft --limit 15", teamRoot);
-        if (prOutput != null)
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(prOutput);
-                foreach (var pr in doc.RootElement.EnumerateArray())
-                {
-                    var num = pr.TryGetProperty("number", out var n) ? n.GetInt32().ToString() : "?";
-                    var title = pr.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
-                    var author = pr.TryGetProperty("author", out var a) && a.TryGetProperty("login", out var al) ? al.GetString() ?? "" : "";
-                    var branch = pr.TryGetProperty("headRefName", out var b) ? b.GetString() ?? "" : "";
-                    var review = pr.TryGetProperty("reviewDecision", out var r) ? r.GetString() ?? "" : "";
-                    var isDraft = pr.TryGetProperty("isDraft", out var d) && d.GetBoolean();
-                    var age = pr.TryGetProperty("createdAt", out var c) && DateTime.TryParse(c.GetString(), out var created)
-                        ? FormatAge(DateTime.Now - created.ToLocalTime()) : "?";
-
-                    if (title.Length > 36) title = title[..33] + "...";
-                    if (author.Length > 12) author = author[..12];
-                    if (branch.Length > 20) branch = branch[..17] + "...";
-
-                    prs.Add(new GitHubPR(num, title, author, branch, review, isDraft, age, repoSlug));
-                }
-            }
-            catch (Exception ex)
-            {
-                prs.Add(new GitHubPR("!", $"Error parsing PRs: {ex.Message}", "", "", "", false, "", repoSlug));
-            }
-        }
-
-        return (issues, prs);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    //  DATA: RALPH WATCH STATUS (markup)
-    // ═══════════════════════════════════════════════════════════════════════
-
-    private static List<string> GetRalphMarkup(string userProfile)
+    private static List<string> GetRalphLines(string userProfile)
     {
         var lines = new List<string>();
-        lines.Add("[cyan bold] Ralph Watch Loop[/]");
+        lines.Add("[cyan bold] ΓöÇΓöÇ Ralph Watch Loop ΓöÇΓöÇ[/]");
         lines.Add("");
 
         var heartbeatPath = Path.Combine(userProfile, ".squad", "ralph-heartbeat.json");
         if (!File.Exists(heartbeatPath))
         {
-            lines.Add("[dim]  No heartbeat -- ralph-watch may not be running[/]");
+            lines.Add("[dim]  No heartbeat ΓÇö ralph-watch may not be running[/]");
             lines.Add("");
             return lines;
         }
@@ -864,7 +617,7 @@ public static class SharpUI
         var logPath = Path.Combine(userProfile, ".squad", "ralph-watch.log");
         if (File.Exists(logPath))
         {
-            lines.Add("[cyan bold] Recent Rounds[/]");
+            lines.Add("[cyan bold] ΓöÇΓöÇ Recent Rounds ΓöÇΓöÇ[/]");
             lines.Add("");
             try
             {
@@ -884,10 +637,11 @@ public static class SharpUI
                             var rd = m.Groups[2].Value;
                             var ec = m.Groups[3].Value;
                             var dur = double.TryParse(m.Groups[4].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? d : 0;
+                            var icon = ec == "0" ? "Γ£à" : "Γ¥î";
                             var color = ec == "0" ? "green" : "red";
                             var dm = (int)(dur / 60);
                             var ds = (int)(dur % 60);
-                            lines.Add($"  [{color}]Round {rd} | {dm}m {ds}s | {(ec == "0" ? "OK" : "FAIL")}[/]");
+                            lines.Add($"  [{color}]Round {rd} | {dm}m {ds}s | {icon}[/]");
                         }
                         else if (!string.IsNullOrWhiteSpace(line))
                         {
@@ -902,23 +656,25 @@ public static class SharpUI
         return lines;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  DATA: TOKEN USAGE & MODEL STATS (structured)
-    // ═══════════════════════════════════════════════════════════════════════
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+    //  DATA: TOKEN USAGE & MODEL STATS
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
-    private static (List<TokenModelStats> Models, string Summary) GetTokenData(string userProfile)
+    private static List<string> GetTokenLines(string userProfile)
     {
-        var models = new List<TokenModelStats>();
-        var summaryText = "[dim]  No token usage data[/]";
+        var lines = new List<string>();
+        lines.Add("");
+        lines.Add("[magenta bold] ΓöÇΓöÇ Token Usage & Model Stats ΓöÇΓöÇ[/]");
+        lines.Add("");
 
         try
         {
             var logDir = Path.Combine(userProfile, ".copilot", "logs");
-            if (!Directory.Exists(logDir)) return (models, summaryText);
+            if (!Directory.Exists(logDir)) { lines.Add("[dim]  No copilot logs directory[/]"); return lines; }
 
             var logFiles = new DirectoryInfo(logDir).GetFiles("*.log")
                 .OrderByDescending(f => f.LastWriteTime).Take(5).ToList();
-            if (logFiles.Count == 0) return (models, summaryText);
+            if (logFiles.Count == 0) { lines.Add("[dim]  No log files found[/]"); return lines; }
 
             var modelStats = new Dictionary<string, (int Calls, long Prompt, long Completion, long Cached, double Cost, List<long> Durations)>();
             var seenApiIds = new HashSet<string>();
@@ -971,43 +727,54 @@ public static class SharpUI
                 catch { }
             }
 
-            if (modelStats.Count == 0) return (models, summaryText);
+            if (modelStats.Count == 0) { lines.Add("[dim]  No usage data in recent logs[/]"); return lines; }
+
+            lines.Add($" [dim]{"Model",-24} {"Calls",6} {"Prompt",10} {"Completion",11} {"Cached",10} {"Cache%",7} {"Latency",8} {"Cost",8}[/]");
+            lines.Add(" [dim]" + new string('\u2500', 90) + "[/]");
 
             foreach (var kvp in modelStats.OrderByDescending(x => x.Value.Calls))
             {
+                var model = kvp.Key.Replace("claude-", "").Replace("gpt-", "");
+                if (model.Length > 22) model = model[..19] + "...";
                 var st = kvp.Value;
                 var cacheTotal = st.Prompt + st.Cached;
                 var cachePct = cacheTotal > 0 ? (double)st.Cached / cacheTotal * 100 : 0;
-                var avgLat = st.Durations.Count > 0 ? st.Durations.Average() : 0;
+                var cacheClr = cachePct > 50 ? "green" : cachePct > 20 ? "yellow" : "dim";
+                var costClr = st.Cost < 5 ? "green" : st.Cost < 20 ? "yellow" : "red";
+                var avgLat = st.Durations.Count > 0 ? $"{st.Durations.Average() / 1000.0:F1}s" : "ΓÇö";
+                var latClr = st.Durations.Count > 0 && st.Durations.Average() > 15000 ? "red"
+                           : st.Durations.Count > 0 && st.Durations.Average() > 5000 ? "yellow" : "green";
 
-                models.Add(new TokenModelStats(
-                    kvp.Key, st.Calls, st.Prompt, st.Completion, st.Cached, cachePct, avgLat, st.Cost));
+                lines.Add($" [cyan]{Esc(model),-24}[/] [white]{st.Calls,6}[/] [blue]{FmtTok(st.Prompt),10}[/] [green]{FmtTok(st.Completion),11}[/] [yellow]{FmtTok(st.Cached),10}[/] [{cacheClr}]{cachePct,6:F0}%[/] [{latClr}]{avgLat,8}[/] [{costClr}]{"$" + st.Cost.ToString("F2"),8}[/]");
             }
 
+            lines.Add("");
             var totalCachePct = (totalPrompt + totalCached) > 0 ? (double)totalCached / (totalPrompt + totalCached) * 100 : 0;
             var totalCalls = modelStats.Values.Sum(s => s.Calls);
-            summaryText = $" [dim]Total:[/] {totalCalls} calls  |  Prompt: [blue]{FmtTok(totalPrompt)}[/]  |  Compl: [green]{FmtTok(totalCompletion)}[/]  |  Cached: [yellow]{FmtTok(totalCached)}[/] ([cyan]{totalCachePct:F0}%[/])  |  Premium: [magenta]{premiumRequests}[/]  |  Cost: [white]${totalCost:F2}[/]";
+            lines.Add($" [dim]Total:[/] {totalCalls} calls  |  Prompt: [blue]{FmtTok(totalPrompt)}[/]  |  Completion: [green]{FmtTok(totalCompletion)}[/]  |  Cached: [yellow]{FmtTok(totalCached)}[/] ([cyan]{totalCachePct:F0}%[/])  |  Premium: [magenta]{premiumRequests}[/]  |  Cost: [white]${totalCost:F2}[/]");
         }
-        catch { }
+        catch { lines.Add("[red]  Error reading token stats[/]"); }
 
-        return (models, summaryText);
+        return lines;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //  DATA: LIVE AGENT FEED (structured)
-    // ═══════════════════════════════════════════════════════════════════════
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+    //  DATA: LIVE AGENT FEED
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
-    private static (List<LiveSessionInfo> Sessions, List<FeedEntry> Entries) GetFeedData(string userProfile, int sessionWindowMinutes)
+    private static List<string> GetFeedLines(string userProfile, int sessionWindowMinutes)
     {
-        var activeSessions = new List<LiveSessionInfo>();
-        var allEntries = new List<FeedEntry>();
+        var lines = new List<string>();
+        lines.Add("[green bold] ΓöÇΓöÇ Live Agent Feed ΓÇö Multi-Session View ΓöÇΓöÇ[/]");
+        lines.Add("");
 
         try
         {
             var now = DateTime.Now;
-            var rawEntries = new List<(DateTime Time, string Icon, string Text, string Session)>();
+            var activeSessions = new List<LiveSessionInfo>();
+            var allEntries = new List<(DateTime Time, string Icon, string Text, string Session)>();
 
-            // ── Scan Agency sessions (~/.agency/logs) ──
+            // ΓöÇΓöÇ Scan Agency sessions (~/.agency/logs) ΓöÇΓöÇ
             var agencyLogDir = Path.Combine(userProfile, ".agency", "logs");
             if (Directory.Exists(agencyLogDir))
             {
@@ -1042,23 +809,26 @@ public static class SharpUI
                         McpCount = logFiles.Count(f => f.Name.StartsWith("agency_mcp_"))
                     });
 
+                    // Parse feed entries
                     if (File.Exists(eventsFile) && new FileInfo(eventsFile).Length > 0)
                     {
                         var entries = ParseEventsFile(eventsFile, sessionName);
-                        rawEntries.AddRange(entries);
+                        allEntries.AddRange(entries);
                         if (entries.Count == 0)
+                        {
                             foreach (var logFile in logFiles.Where(f => f.Name.StartsWith("process-")))
-                                rawEntries.AddRange(ParseProcessLog(logFile.FullName, sessionName));
+                                allEntries.AddRange(ParseProcessLog(logFile.FullName, sessionName));
+                        }
                     }
                     else
                     {
                         foreach (var logFile in logFiles.Where(f => f.Name.StartsWith("process-")))
-                            rawEntries.AddRange(ParseProcessLog(logFile.FullName, sessionName));
+                            allEntries.AddRange(ParseProcessLog(logFile.FullName, sessionName));
                     }
                 }
             }
 
-            // ── Scan Copilot CLI sessions (~/.copilot/logs) ──
+            // ΓöÇΓöÇ Scan Copilot CLI sessions (~/.copilot/logs ΓÇö flat process-*.log files) ΓöÇΓöÇ
             var copilotLogDir = Path.Combine(userProfile, ".copilot", "logs");
             if (Directory.Exists(copilotLogDir))
             {
@@ -1080,10 +850,10 @@ public static class SharpUI
                         IsActive = isActive, ProcessCount = 1
                     });
 
-                    rawEntries.AddRange(ParseProcessLog(logFile.FullName, sessionName));
+                    allEntries.AddRange(ParseProcessLog(logFile.FullName, sessionName));
                 }
 
-                // ── Scan Copilot session subdirectories ──
+                // ΓöÇΓöÇ Scan Copilot session subdirectories (dirs with events.jsonl) ΓöÇΓöÇ
                 var copilotSessionDirs = new DirectoryInfo(copilotLogDir).GetDirectories()
                     .Where(d => (now - d.LastWriteTime).TotalMinutes <= sessionWindowMinutes)
                     .ToList();
@@ -1114,34 +884,90 @@ public static class SharpUI
 
                     if (File.Exists(eventsFile) && new FileInfo(eventsFile).Length > 0)
                     {
-                        rawEntries.AddRange(ParseEventsFile(eventsFile, sessionName));
+                        allEntries.AddRange(ParseEventsFile(eventsFile, sessionName));
                     }
                     else
                     {
                         foreach (var logFile in logFiles.Where(f => f.Name.StartsWith("process-")))
-                            rawEntries.AddRange(ParseProcessLog(logFile.FullName, sessionName));
+                            allEntries.AddRange(ParseProcessLog(logFile.FullName, sessionName));
                     }
                 }
             }
 
-            // Assign colors to sessions and convert to FeedEntry records
-            var sessionNames = rawEntries.Select(e => e.Session).Distinct().ToList();
+            // ΓöÇΓöÇ Session Overview ΓöÇΓöÇ
+            if (activeSessions.Count > 0)
+            {
+                var activeCount = activeSessions.Count(s => s.IsActive);
+                var totalProcesses = activeSessions.Sum(s => s.ProcessCount);
+                var totalMcps = activeSessions.Sum(s => s.McpCount);
+                lines.Add($" [bold]Sessions:[/] {activeSessions.Count} ({activeCount} active)  " +
+                          $"[bold]Agents:[/] {totalProcesses}  [bold]MCPs:[/] {totalMcps}");
+                lines.Add("");
+
+                // Session roster with active indicators
+                foreach (var session in activeSessions.OrderByDescending(s => s.LastWrite))
+                {
+                    var indicator = session.IsActive ? "[green]≡ƒƒó[/]" : "[dim]Γ¼£[/]";
+                    var ageStr = FormatAge(session.Age);
+                    var lastStr = FormatAge(now - session.LastWrite);
+                    var typeColor = session.Type switch
+                    {
+                        "Ralph" => "cyan",
+                        "CLI" => "yellow",
+                        "Copilot" => "blue",
+                        "Interactive" => "green",
+                        "Update" => "magenta",
+                        _ => "dim"
+                    };
+                    var cwdPart = string.IsNullOrEmpty(session.Cwd) ? "" : $" [dim]({Esc(session.Cwd)})[/]";
+                    lines.Add($" {indicator} [{typeColor}]{Esc(session.Name)}[/]{cwdPart}  [dim]age:{ageStr}  last:{lastStr}  procs:{session.ProcessCount}[/]");
+                }
+                lines.Add("");
+            }
+
+            if (allEntries.Count == 0)
+            {
+                lines.Add($"[dim]  No active agent sessions in the last {sessionWindowMinutes} minutes[/]");
+                return lines;
+            }
+
+            // ΓöÇΓöÇ Activity Feed ΓöÇΓöÇ
+            var sorted = allEntries.OrderByDescending(e => e.Time).Take(50).Reverse().ToList();
+
+            // Assign colors to sessions
+            var sessionNames = sorted.Select(e => e.Session).Distinct().ToList();
             var palette = new[] { "cyan", "green", "yellow", "magenta", "blue", "red" };
             var sessionColors = new Dictionary<string, string>();
             for (int i = 0; i < sessionNames.Count; i++)
                 sessionColors[sessionNames[i]] = palette[i % palette.Length];
 
-            allEntries = rawEntries.Select(e => new FeedEntry(
-                e.Time, e.Icon, e.Text, e.Session,
-                sessionColors.GetValueOrDefault(e.Session, "white")
-            )).ToList();
-        }
-        catch { }
+            // Legend
+            var legendParts = sessionNames.Select(s => $"[{sessionColors[s]}]Γûá[/] {Esc(s)}");
+            lines.Add($" Sessions: {string.Join("  ", legendParts)}");
+            lines.Add(" [dim]" + new string('\u2500', 100) + "[/]");
 
-        return (activeSessions, allEntries);
+            foreach (var entry in sorted)
+            {
+                var clr = sessionColors.GetValueOrDefault(entry.Session, "white");
+                var timeStr = entry.Time.ToString("HH:mm:ss");
+                var icon = string.IsNullOrEmpty(entry.Icon) ? "≡ƒöº" : entry.Icon;
+                var text = entry.Text;
+                if (text.Length > 85) text = text[..82] + "...";
+                lines.Add($" [dim]{timeStr}[/] [{clr}][{Esc(entry.Session)}][/] {icon} {Esc(text)}");
+            }
+
+            lines.Add("");
+            lines.Add($" [dim]Showing {sorted.Count} of {allEntries.Count} entries from {sessionNames.Count} session(s)  |  Window: {sessionWindowMinutes}m[/]");
+        }
+        catch (Exception ex)
+        {
+            lines.Add($"[red]  Error: {Esc(ex.Message)}[/]");
+        }
+
+        return lines;
     }
 
-    // ── Live Session Info ────────────────────────────────────────────────
+    // ΓöÇΓöÇ Live Session Info ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     private class LiveSessionInfo
     {
         public string Name { get; set; } = "";
@@ -1155,7 +981,7 @@ public static class SharpUI
         public int McpCount { get; set; }
     }
 
-    // ── Session Metadata Extraction ─────────────────────────────────────
+    // ΓöÇΓöÇ Session Metadata Extraction ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     private static (string Cwd, string ResumeId, DateTime? StartTime) ExtractSessionMetadata(string eventsFilePath)
     {
         try
@@ -1196,7 +1022,7 @@ public static class SharpUI
         return m.Success ? m.Groups[1].Value : null;
     }
 
-    // ── Session Type Detection ──────────────────────────────────────────
+    // ΓöÇΓöÇ Session Type Detection ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     private static string DeriveAgencySessionType(DirectoryInfo sessionDir)
     {
         var chatJsonPath = Path.Combine(sessionDir.FullName, "chat.json");
@@ -1269,6 +1095,7 @@ public static class SharpUI
                 var shortId = parts[3][..Math.Min(5, parts[3].Length)];
                 if (creationTime.HasValue)
                     return $"{creationTime.Value:MMM dd HH:mm} ({shortId})";
+                // Fallback: parse from dir name
                 if (parts.Length >= 3 && parts[1].Length >= 8 && parts[2].Length >= 6)
                 {
                     try
@@ -1288,9 +1115,9 @@ public static class SharpUI
         return dirOrFileName[..Math.Min(20, dirOrFileName.Length)];
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
     //  FEED PARSERS
-    // ═══════════════════════════════════════════════════════════════════════
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
     private static List<(DateTime Time, string Icon, string Text, string Session)> ParseEventsFile(string path, string sessionName)
     {
@@ -1346,7 +1173,7 @@ public static class SharpUI
                         }
 
                         icon = GetToolIcon(toolName);
-                        text = string.IsNullOrEmpty(detail) ? toolName : $"{toolName} -> {detail}";
+                        text = string.IsNullOrEmpty(detail) ? toolName : $"{toolName} ΓåÆ {detail}";
                         if (text.Length > 70) text = text[..67] + "...";
                     }
                     else if (type.Contains("tool_call"))
@@ -1361,12 +1188,12 @@ public static class SharpUI
                         if (!root.TryGetProperty("data", out var data)) continue;
                         var agentName = data.TryGetProperty("agentDisplayName", out var dn) ? dn.GetString() ?? "" :
                                         data.TryGetProperty("agentName", out var an) ? an.GetString() ?? "" : "sub-agent";
-                        icon = ">";
+                        icon = "≡ƒñû";
                         text = $"Spawned {agentName}";
                     }
                     else if (type == "subagent.completed")
                     {
-                        icon = "+";
+                        icon = "Γ£à";
                         text = "Sub-agent completed";
                     }
                     else if (type == "assistant.turn_start")
@@ -1374,36 +1201,36 @@ public static class SharpUI
                         if (root.TryGetProperty("data", out var data))
                         {
                             var turnId = data.TryGetProperty("turnId", out var tid) ? tid.GetString() ?? "?" : "?";
-                            icon = "*";
+                            icon = "≡ƒÆ¡";
                             text = $"Turn {turnId} started";
                         }
                         else continue;
                     }
                     else if (type.Contains("turn"))
                     {
-                        icon = "*";
+                        icon = "≡ƒÆ¡";
                         var msg = root.TryGetProperty("message", out var m) ? m.GetString() ?? "" : "";
                         text = string.IsNullOrEmpty(msg) ? "Turn" : $"Turn: {msg}";
                         if (text.Length > 80) text = text[..77] + "...";
                     }
                     else if (type.Contains("session.start"))
                     {
-                        icon = ">";
+                        icon = "≡ƒÜÇ";
                         text = "Session started";
                     }
                     else if (type == "session.task_complete")
                     {
-                        icon = "=";
+                        icon = "≡ƒÅü";
                         text = "Task completed";
                     }
                     else if (type.Contains("session.end") || type.Contains("complete"))
                     {
-                        icon = "=";
+                        icon = "≡ƒÅü";
                         text = "Session completed";
                     }
                     else if (type.Contains("agent"))
                     {
-                        icon = "@";
+                        icon = "≡ƒñû";
                         text = $"Agent: {type}";
                     }
                     else
@@ -1442,6 +1269,7 @@ public static class SharpUI
                 var trimmed = lines[i].Trim();
                 if (string.IsNullOrWhiteSpace(trimmed)) continue;
 
+                // Parse tool invocation results
                 if (trimmed.Contains("Tool invocation result:"))
                 {
                     var resultMatch = Regex.Match(trimmed, @"Tool invocation result:\s*(?:###\s*)?(.+)$");
@@ -1450,10 +1278,13 @@ public static class SharpUI
                     if (resultText.Length > 60) resultText = resultText[..57] + "...";
 
                     if (TryParseLogTimestamp(trimmed, out var dt))
-                        entries.Add((dt.ToLocalTime(), "=", $"Result: {resultText}", sessionName));
+                    {
+                        entries.Add((dt.ToLocalTime(), "≡ƒôï", $"Result: {resultText}", sessionName));
+                    }
                     continue;
                 }
 
+                // Parse telemetry tool_call_executed lines
                 if (trimmed.Contains("\"tool_name\"") && trimmed.Contains("tool_call_executed"))
                 {
                     var toolNameMatch = Regex.Match(trimmed, "\"tool_name\":\\s*\"([^\"]+)\"");
@@ -1462,15 +1293,18 @@ public static class SharpUI
                     if (toolName == "report_intent" || toolName == "stop_powershell") continue;
 
                     if (TryFindTimestampNearLine(lines, i, out var dt2))
+                    {
                         entries.Add((dt2.ToLocalTime(), GetToolIcon(toolName), toolName, sessionName));
+                    }
                     continue;
                 }
 
+                // Match timestamp patterns
                 var tsMatch = Regex.Match(trimmed, @"(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})");
                 if (!tsMatch.Success) continue;
                 if (!DateTime.TryParse(tsMatch.Groups[1].Value, null, DateTimeStyles.AssumeLocal, out var entryDt)) continue;
 
-                string icon = "=", text = trimmed;
+                string icon = "≡ƒôï", text = trimmed;
 
                 if (trimmed.Contains("tool_call") || trimmed.Contains("Tool:"))
                 {
@@ -1481,15 +1315,15 @@ public static class SharpUI
                 }
                 else if (trimmed.Contains("edit", StringComparison.OrdinalIgnoreCase) && trimmed.Contains("file", StringComparison.OrdinalIgnoreCase))
                 {
-                    icon = "~";
+                    icon = "Γ£Å∩╕Å";
                 }
                 else if (trimmed.Contains("agent", StringComparison.OrdinalIgnoreCase))
                 {
-                    icon = "@";
+                    icon = "≡ƒñû";
                 }
                 else if (trimmed.Contains("complete", StringComparison.OrdinalIgnoreCase))
                 {
-                    icon = "=";
+                    icon = "≡ƒÅü";
                 }
                 else
                 {
@@ -1523,9 +1357,9 @@ public static class SharpUI
         return false;
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
     //  UTILITIES
-    // ═══════════════════════════════════════════════════════════════════════
+    // ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
     private static string? RunCmd(string fileName, string arguments, string? workingDirectory = null, int timeoutMs = 10_000)
     {
@@ -1550,7 +1384,7 @@ public static class SharpUI
         catch { return null; }
     }
 
-    // ─── GitHub Clickable Hyperlinks (OSC 8) ─────────────────────────────────
+    // ΓöÇΓöÇΓöÇ GitHub Clickable Hyperlinks (OSC 8) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
     private static string? _cachedRepoSlug;
     private static bool _repoSlugFetched;
@@ -1563,6 +1397,10 @@ public static class SharpUI
         return _cachedRepoSlug;
     }
 
+    /// <summary>
+    /// Wraps display text in an OSC 8 terminal hyperlink escape sequence.
+    /// Supported by Windows Terminal, iTerm2, and other modern terminals.
+    /// </summary>
     private static string Hyperlink(string url, string text) =>
         $"\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\";
 
@@ -1627,16 +1465,16 @@ public static class SharpUI
 
     private static string GetToolIcon(string toolName) => toolName.ToLowerInvariant() switch
     {
-        "powershell" or "bash" or "shell" => ">",
-        "edit" => "~",
-        "view" or "read" => "?",
-        "create" => "+",
-        "grep" or "glob" or "search" or "find" => "/",
-        "task" => "@",
-        "sql" => "#",
-        "web_fetch" => "W",
-        "git" => "G",
-        _ => "."
+        "powershell" or "bash" or "shell" => "ΓÜí",
+        "edit" => "Γ£Å∩╕Å",
+        "view" or "read" => "≡ƒæü∩╕Å",
+        "create" => "≡ƒôä",
+        "grep" or "glob" or "search" or "find" => "≡ƒöì",
+        "task" => "≡ƒñû",
+        "sql" => "≡ƒùä∩╕Å",
+        "web_fetch" => "≡ƒîÉ",
+        "git" => "≡ƒôª",
+        _ => "≡ƒöº"
     };
 
     private static string ReadBlock(StreamReader reader, string firstLine)
