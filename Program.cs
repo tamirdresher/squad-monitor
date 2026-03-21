@@ -7,59 +7,65 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-// Parse args
+// Ensure emoji and Unicode render correctly on Windows console
+Console.OutputEncoding = Encoding.UTF8;
+
+// Fix for "The handle is invalid" when launched from non-interactive contexts
+// Spectre.Console tries to set CursorVisible which fails without a real console
+try { _ = Console.CursorVisible; }
+catch (IOException)
+{
+    // Re-attach to a console if we don't have one (e.g., Start-Process from another PS)
+    // Force Spectre to use a plain console backend when no real console is attached
+    Environment.SetEnvironmentVariable("NO_COLOR", "1");
+}
+
 var interval = 5;
-var useSharpUI = false;
 var runOnce = false;
-var disableGitHub = false;
+var orchestrationOnlyMode = false;
 var multiSessionMode = false;
+var disableGitHub = false;
+var useSharpUI = false;
 var sessionWindowMinutes = 30;
+var teamRoot = FindTeamRoot();
+var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
 for (int i = 0; i < args.Length; i++)
 {
-    if (args[i] == "--interval" && i + 1 < args.Length && int.TryParse(args[i + 1], out var n) && n > 0)
+    if (args[i] == "--interval" && i + 1 < args.Length && int.TryParse(args[i + 1], out var n))
     {
         interval = n;
         i++;
-        continue;
     }
-    if (args[i] is "--beta" or "--sharp-ui")
-        useSharpUI = true;
-    if (args[i] is "--once")
+    else if (args[i] == "--once")
+    {
         runOnce = true;
-    if (args[i] is "--no-github")
+    }
+    else if (args[i] == "--no-github")
+    {
         disableGitHub = true;
-    if (args[i] is "--multi-session" or "-m")
+    }
+    else if (args[i] == "--sharp-ui" || args[i] == "--beta")
+    {
+        useSharpUI = true;
+    }
+    else if (args[i] == "--multi-session" || args[i] == "-m")
+    {
         multiSessionMode = true;
-    if (args[i] == "--session-window" && i + 1 < args.Length && int.TryParse(args[i + 1], out var sw) && sw > 0)
+    }
+    else if (args[i] == "--session-window" && i + 1 < args.Length && int.TryParse(args[i + 1], out var sw))
     {
         sessionWindowMinutes = sw;
         i++;
-        continue;
     }
 }
 
-var teamRoot = FindTeamRoot();
-
-// Launch SharpConsoleUI mode if requested
+// If SharpConsoleUI mode is enabled, run the new TUI
 if (useSharpUI)
 {
     await SharpUI.RunAsync(teamRoot, interval);
     return 0;
 }
-
-// --- Default Spectre.Console path ---
-// Ensure emoji and Unicode render correctly on Windows console
-Console.OutputEncoding = Encoding.UTF8;
-
-// Fix for "The handle is invalid" when launched from non-interactive contexts
-try { _ = Console.CursorVisible; }
-catch (IOException)
-{
-    Environment.SetEnvironmentVariable("NO_COLOR", "1");
-}
-
-var orchestrationOnlyMode = false;
-var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
 if (teamRoot == null)
 {
@@ -89,7 +95,7 @@ if (runOnce)
 {
     // Run once mode: render directly without Live display
     var now = DateTime.Now;
-    var header = new Rule($"[yellow bold]Squad Monitor v2[/] [dim]— {now:yyyy-MM-dd HH:mm:ss}[/]")
+    var header = new Rule($"[yellow bold]Squad Monitor v2[/] [dim]ΓÇö {now:yyyy-MM-dd HH:mm:ss}[/]")
     {
         Justification = Justify.Left
     };
@@ -185,7 +191,7 @@ else
 
     var layout = new Layout("Root");
 
-    // ─── Carousel / Section Navigation State ────────────────────────────
+    // ΓöÇΓöÇΓöÇ Carousel / Section Navigation State ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     // Section 0 = Overview (all sections, original behavior)
     // Section 1-N = Individual focused sections
     int currentSection = 0;        // 0 = overview
@@ -206,14 +212,14 @@ else
             var quitRequested = false;
             do
             {
-                // ── Build the section list for this frame ──
+                // ΓöÇΓöÇ Build the section list for this frame ΓöÇΓöÇ
                 var sectionEntries = BuildSectionCatalog(userProfile, teamRoot, disableGitHub, sessionWindowMinutes);
                 int sectionCount = sectionEntries.Count;
 
                 // Clamp currentSection if sections changed (e.g., GitHub toggled)
                 if (currentSection > sectionCount) currentSection = 0;
 
-                // ── Handle keyboard input ──
+                // ΓöÇΓöÇ Handle keyboard input ΓöÇΓöÇ
                 while (Console.KeyAvailable)
                 {
                     var key = Console.ReadKey(intercept: true);
@@ -303,7 +309,7 @@ else
 
                 if (quitRequested) break;
 
-                // ── Auto-rotate logic ──
+                // ΓöÇΓöÇ Auto-rotate logic ΓöÇΓöÇ
                 if (autoRotate && !pinned && (DateTime.UtcNow - lastRotateTime).TotalSeconds >= autoRotateIntervalSec)
                 {
                     currentSection = currentSection >= sectionCount ? 1 : currentSection + 1;
@@ -311,7 +317,7 @@ else
                     lastRotateTime = DateTime.UtcNow;
                 }
 
-                // ── Build & render ──
+                // ΓöÇΓöÇ Build & render ΓöÇΓöÇ
                 var now = DateTime.Now;
                 IRenderable content;
 
@@ -349,7 +355,7 @@ else
 
 return 0;
 
-// ─── Section Catalog & Carousel Helpers ────────────────────────────────────
+// ΓöÇΓöÇΓöÇ Section Catalog & Carousel Helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 /// <summary>
 /// Builds a named catalog of individual sections for carousel navigation.
@@ -395,7 +401,7 @@ static IRenderable BuildFocusedSectionContent(DateTime now, int sectionIndex,
 
     // Compact header with section name
     var entry = sectionEntries[sectionIndex - 1]; // 1-based
-    var header = new Rule($"[yellow bold]Squad Monitor[/] [cyan]▸ {Markup.Escape(entry.Name)}[/] [dim]— {now:yyyy-MM-dd HH:mm:ss}[/]")
+    var header = new Rule($"[yellow bold]Squad Monitor[/] [cyan]Γû╕ {Markup.Escape(entry.Name)}[/] [dim]ΓÇö {now:yyyy-MM-dd HH:mm:ss}[/]")
     {
         Justification = Justify.Left
     };
@@ -432,7 +438,7 @@ static IRenderable BuildStatusBar(int currentSection, int sectionCount,
     else
         sectionLabel = "Overview (all)";
 
-    string rotateIndicator = autoRotate ? "▶ Auto" : (pinned ? "📌 Pinned" : "⏸ Paused");
+    string rotateIndicator = autoRotate ? "Γû╢ Auto" : (pinned ? "≡ƒôî Pinned" : "ΓÅ╕ Paused");
 
     var statusText = $"[white on blue] [[{currentSection}/{sectionCount}]] {Markup.Escape(sectionLabel)}  {Markup.Escape(rotateIndicator)} [/]" +
                      $"  [dim]0[/]:Overview  [dim]1-{sectionCount}[/]:Jump  [dim]Tab[/]:Next  " +
@@ -443,7 +449,7 @@ static IRenderable BuildStatusBar(int currentSection, int sectionCount,
     return new Rows(parts);
 }
 
-// ─── Dashboard Content Builder ─────────────────────────────────────────────
+// ΓöÇΓöÇΓöÇ Dashboard Content Builder ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static IRenderable BuildDashboardContent(DateTime now, string userProfile, string teamRoot, bool disableGitHub, int sessionWindowMinutes)
 {
@@ -459,7 +465,7 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
     int maxIssueRows = Math.Max(3, (termHeight - reservedLines) / 3);
 
     // Header
-    var header = new Rule($"[yellow bold]Squad Monitor v2[/] [dim]— {now:yyyy-MM-dd HH:mm:ss}[/]")
+    var header = new Rule($"[yellow bold]Squad Monitor v2[/] [dim]ΓÇö {now:yyyy-MM-dd HH:mm:ss}[/]")
     {
         Justification = Justify.Left
     };
@@ -467,11 +473,11 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
     sections.Add(Text.Empty);
 
     // Legend
-    var legend = new Text("── Legend ── ⚡ Shell  ✏️ Edit  👁️ View  📄 Create  🔍 Search  🤖 Agent  ✅ Done  💭 Turn  🏁 Complete  🔧 Tool", new Style(Color.Cyan3));
+    var legend = new Text("ΓöÇΓöÇ Legend ΓöÇΓöÇ ΓÜí Shell  Γ£Å∩╕Å Edit  ≡ƒæü∩╕Å View  ≡ƒôä Create  ≡ƒöì Search  ≡ƒñû Agent  Γ£à Done  ≡ƒÆ¡ Turn  ≡ƒÅü Complete  ≡ƒöº Tool", new Style(Color.Cyan3));
     sections.Add(legend);
     sections.Add(Text.Empty);
 
-    // Live Agent Activity (tails agency/copilot logs) — top priority visibility
+    // Live Agent Activity (tails agency/copilot logs) ΓÇö top priority visibility
     sections.Add(BuildLiveAgentFeedSection(userProfile, sessionWindowMinutes));
 
     // Token Usage & Model Stats
@@ -505,14 +511,14 @@ static IRenderable BuildDashboardContent(DateTime now, string userProfile, strin
     return rows;
 }
 
-// ─── Orchestration-Only Dashboard Builder ──────────────────────────────────
+// ΓöÇΓöÇΓöÇ Orchestration-Only Dashboard Builder ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static IRenderable BuildOrchestrationOnlyContent(DateTime now, string userProfile, string teamRoot)
 {
     var sections = new List<IRenderable>();
 
     // Header
-    var header = new Rule($"[yellow bold]Squad Monitor v2 — Orchestration View[/] [dim]— {now:yyyy-MM-dd HH:mm:ss}[/]")
+    var header = new Rule($"[yellow bold]Squad Monitor v2 ΓÇö Orchestration View[/] [dim]ΓÇö {now:yyyy-MM-dd HH:mm:ss}[/]")
     {
         Justification = Justify.Left
     };
@@ -520,7 +526,7 @@ static IRenderable BuildOrchestrationOnlyContent(DateTime now, string userProfil
     sections.Add(Text.Empty);
 
     // Legend
-    var legend = new Text("── Legend ── ⚡ Shell  ✏️ Edit  👁️ View  📄 Create  🔍 Search  🤖 Agent  ✅ Done  💭 Turn  🏁 Complete  🔧 Tool", new Style(Color.Cyan3));
+    var legend = new Text("ΓöÇΓöÇ Legend ΓöÇΓöÇ ΓÜí Shell  Γ£Å∩╕Å Edit  ≡ƒæü∩╕Å View  ≡ƒôä Create  ≡ƒöì Search  ≡ƒñû Agent  Γ£à Done  ≡ƒÆ¡ Turn  ≡ƒÅü Complete  ≡ƒöº Tool", new Style(Color.Cyan3));
     sections.Add(legend);
     sections.Add(Text.Empty);
 
@@ -533,14 +539,14 @@ static IRenderable BuildOrchestrationOnlyContent(DateTime now, string userProfil
     return rows;
 }
 
-// ─── Multi-Session Focused Dashboard Builder ──────────────────────────────
+// ΓöÇΓöÇΓöÇ Multi-Session Focused Dashboard Builder ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static IRenderable BuildMultiSessionContent(DateTime now, string userProfile, int sessionWindowMinutes)
 {
     var sections = new List<IRenderable>();
 
     // Header
-    var header = new Rule($"[green bold]Squad Monitor v2 — Multi-Session View[/] [dim]— {now:yyyy-MM-dd HH:mm:ss} — window: {sessionWindowMinutes}m[/]")
+    var header = new Rule($"[green bold]Squad Monitor v2 ΓÇö Multi-Session View[/] [dim]ΓÇö {now:yyyy-MM-dd HH:mm:ss} ΓÇö window: {sessionWindowMinutes}m[/]")
     {
         Justification = Justify.Left
     };
@@ -553,7 +559,7 @@ static IRenderable BuildMultiSessionContent(DateTime now, string userProfile, in
     return new Rows(sections);
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ΓöÇΓöÇΓöÇ Helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static string? FindTeamRoot()
 {
@@ -611,7 +617,7 @@ static string? RunProcess(string fileName, string arguments, string? workingDire
     }
 }
 
-// ─── Clickable Hyperlinks (OSC 8 + Spectre.Console) ────────────────────────
+// ΓöÇΓöÇΓöÇ Clickable Hyperlinks (OSC 8 + Spectre.Console) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static string? GetGitHubRepoSlug(string? teamRoot) =>
     RunProcess("gh", "repo view --json nameWithOwner -q .nameWithOwner", teamRoot)?.Trim();
@@ -666,7 +672,7 @@ static bool IsGhCliAvailable()
     }
 }
 
-// ─── Section Builders (return IRenderable) ──────────────────────────────────
+// ΓöÇΓöÇΓöÇ Section Builders (return IRenderable) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static IRenderable BuildRalphHeartbeatSection(string userProfile)
 {
@@ -678,7 +684,7 @@ static IRenderable BuildRalphHeartbeatSection(string userProfile)
     var heartbeatPath = Path.Combine(userProfile, ".squad", "ralph-heartbeat.json");
     if (!File.Exists(heartbeatPath))
     {
-        items.Add(new Markup("[dim]  No heartbeat file found — ralph-watch may not be running[/]"));
+        items.Add(new Markup("[dim]  No heartbeat file found ΓÇö ralph-watch may not be running[/]"));
         items.Add(Text.Empty);
         return new Rows(items);
     }
@@ -771,7 +777,7 @@ static IRenderable BuildRalphLogSection(string userProfile)
     var logPath = Path.Combine(userProfile, ".squad", "ralph-watch.log");
     if (!File.Exists(logPath))
     {
-        return Text.Empty; // No log file — skip silently
+        return Text.Empty; // No log file ΓÇö skip silently
     }
 
     var section = new Rule("[cyan]Ralph Recent Rounds[/]") { Justification = Justify.Left };
@@ -785,7 +791,7 @@ static IRenderable BuildRalphLogSection(string userProfile)
         var fileLength = fs.Length;
         if (fileLength == 0)
         {
-            items.Add(new Markup("[dim]  Log file exists but is empty — waiting for first round to complete[/]"));
+            items.Add(new Markup("[dim]  Log file exists but is empty ΓÇö waiting for first round to complete[/]"));
             items.Add(Text.Empty);
             return new Rows(items);
         }
@@ -804,7 +810,7 @@ static IRenderable BuildRalphLogSection(string userProfile)
             return new Rows(items);
         }
 
-        // Parse log entries — newer format includes Status, Issues, PRs, Actions fields:
+        // Parse log entries ΓÇö newer format includes Status, Issues, PRs, Actions fields:
         // 2026-03-12T09:24:45 | Round=165 | ExitCode=0 | Duration=1560.4s | Failures=0 | Status=SUCCESS | Issues=0 | PRs=0 | Actions=0
         var logEntryRegex = new Regex(@"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*\|\s*Round=(\d+)\s*\|\s*ExitCode=(\d+)\s*\|\s*Duration=([\d.]+)s(?:\s*\|\s*Failures=(\d+))?(?:\s*\|\s*Status=(\w+))?");
 
@@ -838,7 +844,7 @@ static IRenderable BuildRalphLogSection(string userProfile)
                     var isSuccess = statusField != null 
                         ? statusField.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase) 
                         : exitCode == "0";
-                    var statusIcon = isSuccess ? "✅" : "❌";
+                    var statusIcon = isSuccess ? "Γ£à" : "Γ¥î";
                     var color = isSuccess ? "green" : "red";
                     
                     items.Add(new Markup($"  [{color}]Round {round} | Started {startLocal} | Finished {endLocal} | Duration {durationFormatted} | {statusIcon}[/]"));
@@ -846,10 +852,10 @@ static IRenderable BuildRalphLogSection(string userProfile)
                 else
                 {
                     // Fallback to original line display
-                    var color = trimmed.Contains("✓") ? "green" :
-                               trimmed.Contains("→") ? "cyan" :
-                               trimmed.Contains("⚠") || trimmed.Contains("WARN") ? "yellow" :
-                               trimmed.Contains("✗") || trimmed.Contains("ERROR") ? "red" :
+                    var color = trimmed.Contains("Γ£ô") ? "green" :
+                               trimmed.Contains("ΓåÆ") ? "cyan" :
+                               trimmed.Contains("ΓÜá") || trimmed.Contains("WARN") ? "yellow" :
+                               trimmed.Contains("Γ£ù") || trimmed.Contains("ERROR") ? "red" :
                                "dim";
                     items.Add(new Markup($"  [{color}]{Markup.Escape(trimmed)}[/]"));
                 }
@@ -857,10 +863,10 @@ static IRenderable BuildRalphLogSection(string userProfile)
             else
             {
                 // Non-structured log line (e.g., header)
-                var color = trimmed.Contains("✓") ? "green" :
-                           trimmed.Contains("→") ? "cyan" :
-                           trimmed.Contains("⚠") || trimmed.Contains("WARN") ? "yellow" :
-                           trimmed.Contains("✗") || trimmed.Contains("ERROR") ? "red" :
+                var color = trimmed.Contains("Γ£ô") ? "green" :
+                           trimmed.Contains("ΓåÆ") ? "cyan" :
+                           trimmed.Contains("ΓÜá") || trimmed.Contains("WARN") ? "yellow" :
+                           trimmed.Contains("Γ£ù") || trimmed.Contains("ERROR") ? "red" :
                            "dim";
                 items.Add(new Markup($"  [{color}]{Markup.Escape(trimmed)}[/]"));
             }
@@ -920,7 +926,7 @@ static IRenderable BuildTokenStatsSection(string userProfile)
         long latestCurrentTokens = 0;
 
         // Track which api_ids we've already counted (assistant_usage and cli.model_call
-        // can report the same call — deduplicate via api_id)
+        // can report the same call ΓÇö deduplicate via api_id)
         var seenApiIds = new HashSet<string>();
 
         foreach (var logFile in logFiles)
@@ -1072,7 +1078,7 @@ static IRenderable BuildTokenStatsSection(string userProfile)
 
             var avgLatency = stats.DurationsMs.Count > 0
                 ? $"{stats.DurationsMs.Average() / 1000.0:F1}s"
-                : "—";
+                : "ΓÇö";
             var latencyColor = stats.DurationsMs.Count > 0 && stats.DurationsMs.Average() > 15000 ? "red"
                 : stats.DurationsMs.Count > 0 && stats.DurationsMs.Average() > 5000 ? "yellow"
                 : "green";
@@ -1383,13 +1389,13 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
             var reviewDecision = pr.TryGetProperty("reviewDecision", out var rd) ? rd.GetString() ?? "" : "";
             var reviewStatus = reviewDecision switch
             {
-                "APPROVED" => "[green]✓[/]",
-                "CHANGES_REQUESTED" => "[red]✗[/]",
+                "APPROVED" => "[green]Γ£ô[/]",
+                "CHANGES_REQUESTED" => "[red]Γ£ù[/]",
                 "REVIEW_REQUIRED" => "[yellow]?[/]",
-                _ => "[dim]—[/]"
+                _ => "[dim]ΓÇö[/]"
             };
 
-            var ciStatus = "[dim]—[/]";
+            var ciStatus = "[dim]ΓÇö[/]";
             if (pr.TryGetProperty("statusCheckRollup", out var rollup) && rollup.ValueKind == JsonValueKind.Array)
             {
                 var statuses = rollup.EnumerateArray().ToList();
@@ -1421,7 +1427,7 @@ static IRenderable BuildGitHubPRsSection(string teamRoot)
                         return false;
                     });
 
-                    ciStatus = allSuccess ? "[green]✓[/]" : anyPending ? "[yellow]…[/]" : "[red]✗[/]";
+                    ciStatus = allSuccess ? "[green]Γ£ô[/]" : anyPending ? "[yellow]ΓÇª[/]" : "[red]Γ£ù[/]";
                 }
             }
 
@@ -1580,7 +1586,7 @@ static IRenderable BuildDetailedOrchestrationSection(List<AgentActivity> activit
 {
     var items = new List<IRenderable>();
     
-    var section = new Rule("[yellow bold]Orchestration Activity — Detailed View[/]") { Justification = Justify.Left };
+    var section = new Rule("[yellow bold]Orchestration Activity ΓÇö Detailed View[/]") { Justification = Justify.Left };
     items.Add(section);
     items.Add(Text.Empty);
 
@@ -1597,17 +1603,17 @@ static IRenderable BuildDetailedOrchestrationSection(List<AgentActivity> activit
     var uniqueAgents = activities.Select(a => a.Agent).Distinct().ToList();
     var totalAgents = uniqueAgents.Count;
     
-    var activeCount = activities.Count(a => a.Status.Contains("Progress", StringComparison.OrdinalIgnoreCase) || a.Status.Contains("⏳"));
-    var completedCount = activities.Count(a => a.Status.Contains("Completed", StringComparison.OrdinalIgnoreCase) || a.Status.Contains("✅"));
-    var failedCount = activities.Count(a => a.Status.Contains("Failed", StringComparison.OrdinalIgnoreCase) || a.Status.Contains("❌"));
+    var activeCount = activities.Count(a => a.Status.Contains("Progress", StringComparison.OrdinalIgnoreCase) || a.Status.Contains("ΓÅ│"));
+    var completedCount = activities.Count(a => a.Status.Contains("Completed", StringComparison.OrdinalIgnoreCase) || a.Status.Contains("Γ£à"));
+    var failedCount = activities.Count(a => a.Status.Contains("Failed", StringComparison.OrdinalIgnoreCase) || a.Status.Contains("Γ¥î"));
 
     var statsPanel = new Panel(new Markup(
         $"[cyan]Total Activities:[/] {totalActivities}  |  " +
         $"[yellow]Last 24h:[/] {recentActivities}  |  " +
         $"[cyan]Active Agents:[/] {totalAgents}\n" +
-        $"[yellow]⏳ In Progress:[/] {activeCount}  |  " +
-        $"[green]✅ Completed:[/] {completedCount}  |  " +
-        $"[red]❌ Failed:[/] {failedCount}"))
+        $"[yellow]ΓÅ│ In Progress:[/] {activeCount}  |  " +
+        $"[green]Γ£à Completed:[/] {completedCount}  |  " +
+        $"[red]Γ¥î Failed:[/] {failedCount}"))
     {
         Header = new PanelHeader("[bold]Statistics[/]"),
         Border = BoxBorder.Rounded,
@@ -1626,9 +1632,9 @@ static IRenderable BuildDetailedOrchestrationSection(List<AgentActivity> activit
         var age = now - activity.Timestamp;
         var ageStr = FormatAge(age);
         
-        var statusColor = activity.Status.Contains("✅") || activity.Status.Contains("Completed", StringComparison.OrdinalIgnoreCase) ? "green" :
-                         activity.Status.Contains("⏳") || activity.Status.Contains("Progress", StringComparison.OrdinalIgnoreCase) ? "yellow" :
-                         activity.Status.Contains("❌") || activity.Status.Contains("Failed", StringComparison.OrdinalIgnoreCase) ? "red" :
+        var statusColor = activity.Status.Contains("Γ£à") || activity.Status.Contains("Completed", StringComparison.OrdinalIgnoreCase) ? "green" :
+                         activity.Status.Contains("ΓÅ│") || activity.Status.Contains("Progress", StringComparison.OrdinalIgnoreCase) ? "yellow" :
+                         activity.Status.Contains("Γ¥î") || activity.Status.Contains("Failed", StringComparison.OrdinalIgnoreCase) ? "red" :
                          "blue";
 
         var ageColor = age.TotalHours < 1 ? "green" :
@@ -1639,7 +1645,7 @@ static IRenderable BuildDetailedOrchestrationSection(List<AgentActivity> activit
         var grid = new Grid()
             .AddColumn(new GridColumn().Width(15))
             .AddColumn(new GridColumn().NoWrap())
-            .AddRow($"[cyan bold]{Markup.Escape(activity.Agent)}[/]", $"[{ageColor}]{Markup.Escape(ageStr)} — {Markup.Escape(activity.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"))}[/]")
+            .AddRow($"[cyan bold]{Markup.Escape(activity.Agent)}[/]", $"[{ageColor}]{Markup.Escape(ageStr)} ΓÇö {Markup.Escape(activity.Timestamp.ToString("yyyy-MM-dd HH:mm:ss"))}[/]")
             .AddRow($"[dim]Status:[/]", $"[{statusColor} bold]{Markup.Escape(activity.Status)}[/]");
 
         if (!string.IsNullOrWhiteSpace(activity.Task))
@@ -1672,12 +1678,12 @@ static IRenderable BuildDetailedOrchestrationSection(List<AgentActivity> activit
     return new Rows(items);
 }
 
-// ─── Live Agent Feed Section (Multi-Session) ────────────────────────────────
+// ΓöÇΓöÇΓöÇ Live Agent Feed Section (Multi-Session) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWindowMinutes = 30, bool expandedFeed = false)
 {
     var items = new List<IRenderable>();
-    var section = new Rule("[green bold]Live Agent Feed — Multi-Session View[/]") { Justification = Justify.Left };
+    var section = new Rule("[green bold]Live Agent Feed ΓÇö Multi-Session View[/]") { Justification = Justify.Left };
     items.Add(section);
 
     try
@@ -1759,7 +1765,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
             }
         }
 
-        // Scan Copilot CLI sessions (~/.copilot/logs — process-*.log files)
+        // Scan Copilot CLI sessions (~/.copilot/logs ΓÇö process-*.log files)
         var copilotLogDir = Path.Combine(userProfile, ".copilot", "logs");
         if (Directory.Exists(copilotLogDir))
         {
@@ -1953,7 +1959,7 @@ static IRenderable BuildLiveAgentFeedSection(string userProfile, int sessionWind
     return new Rows(items);
 }
 
-// ─── Helper Methods for Multi-Session View ─────────────────────
+// ΓöÇΓöÇΓöÇ Helper Methods for Multi-Session View ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static string DeriveAgencySessionType(DirectoryInfo sessionDir)
 {
@@ -2009,7 +2015,7 @@ static string DeriveAgencySessionType(DirectoryInfo sessionDir)
 
 static DateTime? ParseSessionCreationTime(string sessionDirName)
 {
-    // Parse "session_YYYYMMDD_HHMMSS_NNNNN" → DateTime
+    // Parse "session_YYYYMMDD_HHMMSS_NNNNN" ΓåÆ DateTime
     var match = Regex.Match(sessionDirName, @"^session_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_\d+$");
     if (!match.Success) return null;
 
@@ -2025,7 +2031,7 @@ static DateTime? ParseSessionCreationTime(string sessionDirName)
 
 static string ExtractPidFromProcessLog(string fileName)
 {
-    // "process-1772902488521-76232.log" → "76232"
+    // "process-1772902488521-76232.log" ΓåÆ "76232"
     var match = Regex.Match(fileName, @"process-\d+-(\d+)\.log$");
     return match.Success ? match.Groups[1].Value : fileName.Replace(".log", "");
 }
@@ -2220,7 +2226,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     }
 
                     var icon = GetToolIcon(toolName);
-                    var displayText = string.IsNullOrEmpty(detail) ? toolName : $"{toolName} → {detail}";
+                    var displayText = string.IsNullOrEmpty(detail) ? toolName : $"{toolName} ΓåÆ {detail}";
                     if (displayText.Length > 70) displayText = displayText.Substring(0, 67) + "...";
 
                     entries.Add(new FeedEntry
@@ -2240,7 +2246,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "🤖",
+                        Icon = "≡ƒñû",
                         Text = $"Spawned {agentName}",
                         SessionName = sessionName
                     });
@@ -2251,7 +2257,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "✅",
+                        Icon = "Γ£à",
                         Text = "Sub-agent completed",
                         SessionName = sessionName
                     });
@@ -2263,7 +2269,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "💭",
+                        Icon = "≡ƒÆ¡",
                         Text = $"Turn {turnId} started",
                         SessionName = sessionName
                     });
@@ -2274,7 +2280,7 @@ static List<FeedEntry> ExtractFeedEntriesFromEvents(string eventsPath, string se
                     {
                         Time = timeStr,
                         TimeValue = localDt,
-                        Icon = "🏁",
+                        Icon = "≡ƒÅü",
                         Text = "Task completed",
                         SessionName = sessionName
                     });
@@ -2328,7 +2334,7 @@ static List<FeedEntry> ExtractFeedEntriesFromLog(string logPath, string sessionN
                     {
                         Time = dt.ToLocalTime().ToString("HH:mm:ss"),
                         TimeValue = dt.ToLocalTime(),
-                        Icon = "🔧",
+                        Icon = "≡ƒöº",
                         Text = $"Result: {resultText}",
                         SessionName = sessionName
                     });
@@ -2389,21 +2395,21 @@ static string GetToolIcon(string toolName)
 {
     return toolName switch
     {
-        "powershell" => "⚡",
-        "edit" => "✏️",
-        "create" => "📄",
-        "view" => "👁️",
-        "grep" => "🔍",
-        "glob" => "🔍",
-        "task" => "🤖",
-        "task_complete" => "✅",
-        _ when toolName.StartsWith("github-mcp") => "🔧",
-        _ when toolName.StartsWith("azure-devops") => "🔧",
-        _ when toolName.StartsWith("playwright") => "🔧",
-        _ when toolName.StartsWith("workiq") => "🔧",
-        _ when toolName.StartsWith("enghub") => "🔧",
-        _ when toolName.Contains("search") => "🔍",
-        _ => "🔧"
+        "powershell" => "ΓÜí",
+        "edit" => "Γ£Å∩╕Å",
+        "create" => "≡ƒôä",
+        "view" => "≡ƒæü∩╕Å",
+        "grep" => "≡ƒöì",
+        "glob" => "≡ƒöì",
+        "task" => "≡ƒñû",
+        "task_complete" => "Γ£à",
+        _ when toolName.StartsWith("github-mcp") => "≡ƒöº",
+        _ when toolName.StartsWith("azure-devops") => "≡ƒöº",
+        _ when toolName.StartsWith("playwright") => "≡ƒöº",
+        _ when toolName.StartsWith("workiq") => "≡ƒöº",
+        _ when toolName.StartsWith("enghub") => "≡ƒöº",
+        _ when toolName.Contains("search") => "≡ƒöì",
+        _ => "≡ƒöº"
     };
 }
 
@@ -2420,7 +2426,7 @@ static Dictionary<string, string> AssignSessionColors(List<string> sessionNames)
     return colorMap;
 }
 
-// ─── Ralph Heartbeat Panel ──────────────────────────────────────────────────
+// ΓöÇΓöÇΓöÇ Ralph Heartbeat Panel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static void DisplayRalphHeartbeat(string userProfile)
 {
@@ -2430,7 +2436,7 @@ static void DisplayRalphHeartbeat(string userProfile)
     var heartbeatPath = Path.Combine(userProfile, ".squad", "ralph-heartbeat.json");
     if (!File.Exists(heartbeatPath))
     {
-        AnsiConsole.MarkupLine("[dim]  No heartbeat file found — ralph-watch may not be running[/]");
+        AnsiConsole.MarkupLine("[dim]  No heartbeat file found ΓÇö ralph-watch may not be running[/]");
         AnsiConsole.WriteLine();
         return;
     }
@@ -2488,14 +2494,14 @@ static void DisplayRalphHeartbeat(string userProfile)
     AnsiConsole.WriteLine();
 }
 
-// ─── Ralph Watch Log Panel ──────────────────────────────────────────────────
+// ΓöÇΓöÇΓöÇ Ralph Watch Log Panel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static void DisplayRalphLog(string userProfile)
 {
     var logPath = Path.Combine(userProfile, ".squad", "ralph-watch.log");
     if (!File.Exists(logPath))
     {
-        return; // No log file — skip silently
+        return; // No log file ΓÇö skip silently
     }
 
     var section = new Rule("[cyan]Ralph Recent Rounds[/]") { Justification = Justify.Left };
@@ -2553,7 +2559,7 @@ static void DisplayRalphLog(string userProfile)
                         var isSuccess = statusField != null
                             ? statusField.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase)
                             : exitCode == "0";
-                        var statusIcon = isSuccess ? "✅" : "❌";
+                        var statusIcon = isSuccess ? "Γ£à" : "Γ¥î";
                         var color = isSuccess ? "green" : "red";
 
                         AnsiConsole.MarkupLine($"  [{color}]Round {round} | Started {startLocal} | Finished {endLocal} | Duration {durationFormatted} | {statusIcon}[/]");
@@ -2563,7 +2569,7 @@ static void DisplayRalphLog(string userProfile)
 
                 // Fallback: show raw line with color coding
                 if (trimmed.Length > 120)
-                    trimmed = trimmed[..120] + "…";
+                    trimmed = trimmed[..120] + "ΓÇª";
                 var fallbackColor = trimmed.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ? "red" :
                            trimmed.Contains("WARN", StringComparison.OrdinalIgnoreCase) ? "yellow" :
                            trimmed.Contains("SUCCESS", StringComparison.OrdinalIgnoreCase) ? "green" :
@@ -2580,7 +2586,7 @@ static void DisplayRalphLog(string userProfile)
     AnsiConsole.WriteLine();
 }
 
-// ─── GitHub Issues Panel ────────────────────────────────────────────────────
+// ΓöÇΓöÇΓöÇ GitHub Issues Panel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static void DisplayGitHubIssues(string teamRoot)
 {
@@ -2619,7 +2625,7 @@ static void DisplayGitHubIssues(string teamRoot)
         {
             var number = issue.GetProperty("number").GetInt32();
             var title = issue.GetProperty("title").GetString() ?? "";
-            if (title.Length > 60) title = title[..60] + "…";
+            if (title.Length > 60) title = title[..60] + "ΓÇª";
 
             var labels = string.Join(", ", issue.GetProperty("labels").EnumerateArray()
                 .Select(l => l.GetProperty("name").GetString() ?? "")
@@ -2660,7 +2666,7 @@ static void DisplayGitHubIssues(string teamRoot)
     AnsiConsole.WriteLine();
 }
 
-// ─── GitHub PRs Panel ───────────────────────────────────────────────────────
+// ΓöÇΓöÇΓöÇ GitHub PRs Panel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static void DisplayGitHubPRs(string teamRoot)
 {
@@ -2702,7 +2708,7 @@ static void DisplayGitHubPRs(string teamRoot)
             var title = pr.GetProperty("title").GetString() ?? "";
             var isDraft = pr.TryGetProperty("isDraft", out var d) && d.GetBoolean();
             if (isDraft) title = "[draft] " + title;
-            if (title.Length > 55) title = title[..55] + "…";
+            if (title.Length > 55) title = title[..55] + "ΓÇª";
 
             var author = pr.TryGetProperty("author", out var auth) && auth.TryGetProperty("login", out var login)
                 ? login.GetString() ?? "" : "";
@@ -2711,14 +2717,14 @@ static void DisplayGitHubPRs(string teamRoot)
             var reviewDecision = pr.TryGetProperty("reviewDecision", out var rd) ? rd.GetString() ?? "" : "";
             var reviewDisplay = reviewDecision switch
             {
-                "APPROVED" => "[green]✓ Approved[/]",
-                "CHANGES_REQUESTED" => "[red]✗ Changes[/]",
-                "REVIEW_REQUIRED" => "[yellow]⏳ Pending[/]",
-                _ => "[dim]—[/]"
+                "APPROVED" => "[green]Γ£ô Approved[/]",
+                "CHANGES_REQUESTED" => "[red]Γ£ù Changes[/]",
+                "REVIEW_REQUIRED" => "[yellow]ΓÅ│ Pending[/]",
+                _ => "[dim]ΓÇö[/]"
             };
 
             // CI status rollup
-            var ciDisplay = "[dim]—[/]";
+            var ciDisplay = "[dim]ΓÇö[/]";
             if (pr.TryGetProperty("statusCheckRollup", out var checks) && checks.ValueKind == JsonValueKind.Array)
             {
                 var total = checks.GetArrayLength();
@@ -2735,11 +2741,11 @@ static void DisplayGitHubPRs(string teamRoot)
                 }
 
                 if (fail > 0)
-                    ciDisplay = $"[red]✗ {fail}/{total}[/]";
+                    ciDisplay = $"[red]Γ£ù {fail}/{total}[/]";
                 else if (pending > 0)
-                    ciDisplay = $"[yellow]⏳ {pending}/{total}[/]";
+                    ciDisplay = $"[yellow]ΓÅ│ {pending}/{total}[/]";
                 else if (success == total && total > 0)
-                    ciDisplay = $"[green]✓ {success}/{total}[/]";
+                    ciDisplay = $"[green]Γ£ô {success}/{total}[/]";
             }
 
             var updatedStr = "";
@@ -2806,13 +2812,13 @@ static void DisplayRecentlyMergedPRs(string teamRoot)
         {
             var number = pr.GetProperty("number").GetInt32();
             var title = pr.GetProperty("title").GetString() ?? "";
-            if (title.Length > 50) title = title[..50] + "…";
+            if (title.Length > 50) title = title[..50] + "ΓÇª";
 
             var author = pr.TryGetProperty("author", out var auth) && auth.TryGetProperty("login", out var login)
                 ? login.GetString() ?? "" : "";
             
             var branch = pr.TryGetProperty("headRefName", out var b) ? b.GetString() ?? "" : "";
-            if (branch.Length > 25) branch = branch[..25] + "…";
+            if (branch.Length > 25) branch = branch[..25] + "ΓÇª";
 
             var mergedStr = "";
             if (pr.TryGetProperty("mergedAt", out var mergedAt) &&
@@ -2840,7 +2846,7 @@ static void DisplayRecentlyMergedPRs(string teamRoot)
     AnsiConsole.WriteLine();
 }
 
-// ─── Orchestration Log Panel ────────────────────────────────────────────────
+// ΓöÇΓöÇΓöÇ Orchestration Log Panel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 static List<AgentActivity> LoadActivities(string teamRoot)
 {
@@ -2902,12 +2908,12 @@ static AgentActivity? ParseOrchestrationLog(string filePath)
     // If status is still Unknown, check for emojis or common patterns in the content
     if (status == "Unknown")
     {
-        if (content.Contains("✅") || Regex.IsMatch(content, @"(?i)(completed|success|done)"))
-            status = "✅ Completed";
-        else if (content.Contains("⏳") || Regex.IsMatch(content, @"(?i)in.progress"))
-            status = "⏳ In Progress";
-        else if (content.Contains("❌") || Regex.IsMatch(content, @"(?i)failed"))
-            status = "❌ Failed";
+        if (content.Contains("Γ£à") || Regex.IsMatch(content, @"(?i)(completed|success|done)"))
+            status = "Γ£à Completed";
+        else if (content.Contains("ΓÅ│") || Regex.IsMatch(content, @"(?i)in.progress"))
+            status = "ΓÅ│ In Progress";
+        else if (content.Contains("Γ¥î") || Regex.IsMatch(content, @"(?i)failed"))
+            status = "Γ¥î Failed";
     }
 
     var task = "";
@@ -2972,9 +2978,9 @@ static void DisplayOrchestrationLog(List<AgentActivity> activities)
         var age = now - activity.Timestamp;
         var ageStr = FormatAge(age);
 
-        var statusColor = activity.Status.Contains("✅") || activity.Status.Contains("Completed") ? "green" :
-                         activity.Status.Contains("⏳") || activity.Status.Contains("Progress") ? "yellow" :
-                         activity.Status.Contains("❌") || activity.Status.Contains("Failed") ? "red" :
+        var statusColor = activity.Status.Contains("Γ£à") || activity.Status.Contains("Completed") ? "green" :
+                         activity.Status.Contains("ΓÅ│") || activity.Status.Contains("Progress") ? "yellow" :
+                         activity.Status.Contains("Γ¥î") || activity.Status.Contains("Failed") ? "red" :
                          "blue";
 
         table.AddRow(
