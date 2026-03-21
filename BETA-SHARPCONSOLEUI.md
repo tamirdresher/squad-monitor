@@ -1,20 +1,59 @@
-# SharpConsoleUI Beta Integration
+# SharpConsoleUI TUI Dashboard
 
-This branch integrates **SharpConsoleUI** (v2.4.40), a modern .NET terminal UI framework with compositor-based multi-window architecture.
+This branch integrates **SharpConsoleUI** (v2.4.44), a modern .NET terminal UI framework with compositor-based multi-window architecture, providing a fully interactive dashboard experience.
 
 ## What's Been Done
 
 ✅ **Package Integration:**
-- Added `SharpConsoleUI` v2.4.40 NuGet package
-- Upgraded `Spectre.Console` from 0.49.1 → 0.54.0 (required by SharpConsoleUI)
+- Upgraded `SharpConsoleUI` to v2.4.44
+- `Spectre.Console` 0.54.0 (unchanged)
 
-✅ **Beta Mode Entry Point:**
-- New `--sharp-ui` or `--beta` command-line flag
-- Proof-of-concept `SharpUI.cs` module demonstrating integration approach
+✅ **Polished Controls Layout:**
+- `TableControl` — interactive GitHub Issues and PRs with fuzzy filtering (`/`) and column sorting (click header)
+- `TabControl` — right panel with tabs: **1 Ralph** / **2 Tokens** / **3 Sessions**
+- `SparklineControl` — agent activity chart with green→cyan gradient in the feed area
+- `HorizontalSplitter` — drag-resizable split between main grid and feed area
+- `StatusBarControl` — sticky bottom bar with labelled shortcuts
+
+✅ **Gradient Background:**
+- `WindowBuilder.WithBackgroundGradient(ColorGradient.FromColors([Navy, Black]), GradientDirection.Vertical)`
+- Steel-blue border for the active window
 
 ✅ **Backward Compatibility:**
 - Original Spectre.Console mode remains default
-- SharpConsoleUI mode is opt-in via flag
+- SharpConsoleUI mode is opt-in via `--sharp-ui` / `--beta` flag
+
+## Layout
+
+```
+Window (Maximized, Navy→Black gradient, SteelBlue border)
+├── Header [StickyTop]  Squad Monitor v2 — TUI Dashboard  ⟳ HH:MM:SS
+├── HorizontalSplitter (draggable)
+│   ├── Top: HorizontalGrid (column splitter)
+│   │   ├── Left (flex 6): ScrollablePanel
+│   │   │   ├── TableControl: GitHub Issues  (filter with /, sort by header)
+│   │   │   └── TableControl: Pull Requests  (filter with /, sort by header)
+│   │   └── Right (flex 4): TabControl
+│   │       ├── Tab "1 Ralph"    — Ralph heartbeat & recent rounds
+│   │       ├── Tab "2 Tokens"   — Token usage & model stats
+│   │       └── Tab "3 Sessions" — Live agent sessions
+│   └── Bottom: ScrollablePanel
+│       ├── SparklineControl: Agent Activity (green→cyan)
+│       └── MarkupControl: Live agent feed entries
+└── StatusBarControl [StickyBottom]
+    q=Quit  /=Filter  r=Refresh  Tab=Next  |  1=Ralph  2=Tokens  3=Sessions
+```
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `q` | Quit |
+| `r` | Force refresh (invalidates all caches) |
+| `1` / `2` / `3` | Switch to Ralph / Tokens / Sessions tab |
+| `/` | Open fuzzy filter on focused table |
+| `↑↓` | Sort / scroll |
+| `Tab` | Navigate between panels |
 
 ## Usage
 
@@ -22,7 +61,7 @@ This branch integrates **SharpConsoleUI** (v2.4.40), a modern .NET terminal UI f
 # Run standard mode (unchanged)
 dotnet run
 
-# Run SharpConsoleUI beta mode
+# Run SharpConsoleUI TUI dashboard
 dotnet run -- --sharp-ui
 # or
 dotnet run -- --beta
