@@ -104,7 +104,7 @@ The current implementation is a **proof-of-concept placeholder**. Next steps:
 
 ## Resources
 
-- **NuGet Package:** https://www.nuget.org/packages/SharpConsoleUI/2.4.40
+- **NuGet Package:** https://www.nuget.org/packages/SharpConsoleUI/2.4.44
 - **GitHub:** https://github.com/nickprotop/ConsoleEx
 - **Documentation:** https://dev.to/nikolaos_protopapas_d3bd6/building-terminal-uis-in-net-how-sharpconsoleui-complements-terminalgui-hb9
 
