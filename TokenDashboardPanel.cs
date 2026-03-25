@@ -34,8 +34,7 @@ public static class TokenDashboardPanel
             items.Add(new Markup("[yellow bold]  Agent Token Usage[/]"));
             var agentTable = new Table()
                 .Border(TableBorder.Simple)
-                .BorderColor(Color.Grey)
-                .AddColumn(new TableColumn("[dim]Agent[/]").LeftAligned())
+                .BorderColor(Spectre.Console.Color.Grey)
                 .AddColumn(new TableColumn("[dim]Calls[/]").RightAligned())
                 .AddColumn(new TableColumn("[dim]Input[/]").RightAligned())
                 .AddColumn(new TableColumn("[dim]Output[/]").RightAligned())
@@ -60,7 +59,7 @@ public static class TokenDashboardPanel
                 items.Add(new Markup($"[yellow bold]  Top Sessions by Cost[/] [dim]({tracker.SessionStats.Count} total)[/]"));
                 var sessionTable = new Table()
                     .Border(TableBorder.Simple)
-                    .BorderColor(Color.Grey)
+                    .BorderColor(Spectre.Console.Color.Grey)
                     .AddColumn(new TableColumn("[dim]Session[/]").LeftAligned())
                     .AddColumn(new TableColumn("[dim]Calls[/]").RightAligned())
                     .AddColumn(new TableColumn("[dim]Tokens[/]").RightAligned())
