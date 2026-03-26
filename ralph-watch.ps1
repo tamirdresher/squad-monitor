@@ -424,11 +424,11 @@ while ($true) {
     
     try {
         # Run your AI agent CLI here. Replace with your actual command.
-        # Example: agency copilot --yolo --autopilot --agent squad -p $prompt
+        # Example: agency copilot --yolo --autopilot -p $prompt -- --agent squad
         # For now, this is a placeholder — replace with your agent invocation:
         Write-Host "[$timestamp] Running agent session..." -ForegroundColor Yellow
         # Uncomment and customize the line below for your agent CLI:
-        # agency copilot --yolo --autopilot --agent squad -p $prompt
+        # agency copilot --yolo --autopilot -p $prompt -- --agent squad
         # $exitCode = $LASTEXITCODE
         
         # Placeholder: simulate a successful round
