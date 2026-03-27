@@ -11,6 +11,10 @@
 #   → Written BEFORE round (status=running) and AFTER (status=idle/error)
 #   → Includes pid, status, round, lastRun, exitCode, consecutiveFailures
 # - Log rotation: capped at 500 entries / 1MB
+# Auth setup — use personal GitHub account
+$env:GH_CONFIG_DIR = "$env:APPDATA\GitHub CLI"
+gh auth switch --user tamirdresher 2>$null
+
 
 # ─── UTF-8 Setup ───────────────────────────────────────────────────────────
 # Fix UTF-8 rendering in Windows PowerShell console
@@ -424,11 +428,13 @@ while ($true) {
     
     try {
         # Run your AI agent CLI here. Replace with your actual command.
-        # Example: agency copilot --yolo --autopilot -p $prompt -- --agent squad
-        # For now, this is a placeholder — replace with your agent invocation:
         Write-Host "[$timestamp] Running agent session..." -ForegroundColor Yellow
-        # Uncomment and customize the line below for your agent CLI:
+        # Uncomment and customize the lines below for your agent CLI:
         # agency copilot --yolo --autopilot -p $prompt -- --agent squad
+        # if ($LASTEXITCODE -ne 0) {
+        #     Write-Host "[fallback] Retrying without -- separator"
+        #     agency copilot --yolo --autopilot --agent squad -p $prompt
+        # }
         # $exitCode = $LASTEXITCODE
         
         # Placeholder: simulate a successful round
