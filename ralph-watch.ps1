@@ -430,10 +430,10 @@ while ($true) {
         # Run your AI agent CLI here. Replace with your actual command.
         Write-Host "[$timestamp] Running agent session..." -ForegroundColor Yellow
         # Uncomment and customize the lines below for your agent CLI:
-        # agency copilot --yolo --autopilot -p $prompt -- --agent squad
+        # agency copilot --yolo --autopilot --agent squad -p $prompt
         # if ($LASTEXITCODE -ne 0) {
-        #     Write-Host "[fallback] Retrying without -- separator"
-        #     agency copilot --yolo --autopilot --agent squad -p $prompt
+        #     Write-Host "[fallback] Retrying with -- --agent squad separator"
+        #     agency copilot --yolo --autopilot -p $prompt -- --agent squad
         # }
         # $exitCode = $LASTEXITCODE
         
