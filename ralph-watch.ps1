@@ -427,31 +427,100 @@ while ($true) {
     $activityHandle = $activityRunspace.BeginInvoke()
     
     try {
-        # Run your AI agent CLI here. Replace with your actual command.
         Write-Host "[$timestamp] Running agent session..." -ForegroundColor Yellow
-        
-        # PS 5.1 converts native stderr to NativeCommandError exceptions.
-        # Agency writes emoji banners to stderr, causing false failures.
-        # Fix: suppress stderr-to-error conversion with ErrorAction SilentlyContinue
-        # and call agency without pipes so $LASTEXITCODE is preserved.
-        $ErrorActionPreference_saved = $ErrorActionPreference
         $ErrorActionPreference = "SilentlyContinue"
         # Each round is a fresh session — no --resume, prevents session corruption cascading
         # Write prompt to temp file to avoid Start-Process argument splitting
-        # (embedded flags like -R in prompt text get misinterpreted as CLI args)
         $promptFile = Join-Path $env:TEMP "ralph-prompt-squad-monitor-$round.txt"
         [System.IO.File]::WriteAllText($promptFile, $prompt, [System.Text.Encoding]::UTF8)
 
-        # Create a thin wrapper script that reads the prompt from file and calls agency
-        # This avoids ALL Start-Process argument quoting issues
+        # Create wrapper script — avoids Start-Process quoting issues
         $wrapperScript = Join-Path $env:TEMP "ralph-round-squad-monitor-$round.ps1"
         @"
-`$promptFile = '$($promptFile.Replace("'","''"))'
-`$p = [System.IO.File]::ReadAllText(`$promptFile)
-`$singleLine = `$p -replace "``r``n", " " -replace "``n", " "
-# Try without -- first (works with agency v2026.3.27+); fall back to -- --agent for older versions
 `$env:AGENCY_SESSION_ID = ''
 `$env:cli_resume = ''
 `$env:MSFT_AGENCY = ''
-agency copilot --yolo --autopilot -p `$singleLine
-exit $LASTEXITCODE
+`$p = [System.IO.File]::ReadAllText('$($promptFile.Replace("'","''"))')
+agency copilot --yolo --autopilot -p `$p
+exit `$LASTEXITCODE
+"@ | Out-File -FilePath $wrapperScript -Encoding utf8 -Force
+
+        $agencyProc = Start-Process -FilePath "pwsh" `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $wrapperScript) `
+            -PassThru -NoNewWindow
+        $timedOut = $false
+        $timeoutMs = $roundTimeoutMinutes * 60 * 1000
+        if (-not $agencyProc.WaitForExit($timeoutMs)) {
+            $timedOut = $true
+            Write-Host "[$((Get-Date -Format 'HH:mm:ss'))] TIMEOUT: Round $round exceeded ${roundTimeoutMinutes}m — killing" -ForegroundColor Red
+            try { Stop-Process -Id $agencyProc.Id -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        $exitCode = if ($timedOut) { 124 } else { $agencyProc.ExitCode }
+        
+        if ($exitCode -eq 0) {
+            $consecutiveFailures = 0
+            $roundStatus = "idle"
+            $logStatus = "SUCCESS"
+        } else {
+            $consecutiveFailures++
+            $roundStatus = "error"
+            $logStatus = "FAILED"
+        }
+        
+        # Parse metrics from output
+        $metrics = Parse-AgencyMetrics -Output $agencyOutput
+        
+    } catch {
+        Write-Host "[$timestamp] Error: $($_.Exception.Message)" -ForegroundColor Red
+        $exitCode = 1
+        $consecutiveFailures++
+        $roundStatus = "error"
+        $logStatus = "ERROR"
+    } finally {
+        # Stop activity monitor runspace
+        if ($activityRunspace) {
+            $activityRunspace.Stop()
+            $activityRunspace.Dispose()
+        }
+    }
+    
+    # Calculate duration
+    $endTime = Get-Date
+    $durationSeconds = ($endTime - $startTime).TotalSeconds
+    $durationMinutes = [math]::Floor($durationSeconds / 60)
+    $durationSecs = [math]::Floor($durationSeconds % 60)
+    $durationStr = "${durationMinutes}m ${durationSecs}s"
+    $endDisplayTime = Get-Date -Format "HH:mm:ss"
+    
+    # Show round completion
+    if ($exitCode -eq 0) {
+        Write-Host "[$endDisplayTime] Round $round completed in $durationStr (exit: $exitCode)" -ForegroundColor Green
+    } else {
+        Write-Host "[$endDisplayTime] Round $round completed in $durationStr (exit: $exitCode)" -ForegroundColor Yellow
+    }
+    
+    # Write structured log entry with metrics
+    Write-RalphLog -Round $round -Timestamp $timestamp -ExitCode $exitCode -DurationSeconds $durationSeconds -ConsecutiveFailures $consecutiveFailures -Status $logStatus -Metrics $metrics
+    
+    # Write heartbeat AFTER round (status: idle or error) with metrics
+    Update-Heartbeat -Round $round -Status $roundStatus -ExitCode $exitCode -DurationSeconds $durationSeconds -ConsecutiveFailures $consecutiveFailures -Metrics $metrics
+    
+    # Rotate log if needed
+    Invoke-LogRotation
+    
+    # Send webhook alert if 3+ consecutive failures
+    if ($consecutiveFailures -ge 3) {
+        Write-Host "[$timestamp] Consecutive failures threshold reached ($consecutiveFailures), sending alert..." -ForegroundColor Yellow
+        Send-WebhookAlert -Round $round -ConsecutiveFailures $consecutiveFailures -ExitCode $exitCode -Metrics $metrics
+    }
+    
+    # Calculate and display next round time
+    $nextRoundTime = (Get-Date).AddSeconds($intervalMinutes * 60)
+    $nextRoundDisplayTime = $nextRoundTime.ToString("HH:mm:ss")
+    Write-Host "[$endDisplayTime] Next round at $nextRoundDisplayTime (in $intervalMinutes minutes)" -ForegroundColor DarkGray
+    
+    if ($metrics.issuesClosed -gt 0 -or $metrics.prsMerged -gt 0 -or $metrics.agentActions -gt 0) {
+        Write-Host "[$endDisplayTime] Metrics: Issues closed: $($metrics.issuesClosed), PRs merged: $($metrics.prsMerged), Agent actions: $($metrics.agentActions)" -ForegroundColor DarkGray
+    }
+    Start-Sleep -Seconds ($intervalMinutes * 60)
+}
